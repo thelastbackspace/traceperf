@@ -17,4 +17,18 @@ export * from './types';
 export * from './core';
 export * from './formatters';
 export * from './trackers';
-export * from './utils'; 
+export * from './utils';
+
+// Add CommonJS compatibility
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = Object.assign(defaultLogger, {
+    default: defaultLogger,
+    createLogger,
+    // Re-export everything from the modules
+    ...require('./types'),
+    ...require('./core'),
+    ...require('./formatters'),
+    ...require('./trackers'),
+    ...require('./utils')
+  });
+} 

@@ -307,16 +307,32 @@ class BrowserLogger {
   }
 }
 
-// Create a singleton instance of the browser logger
-const browserLogger = new BrowserLogger();
-
-// Export the singleton instance as the default export
-export default browserLogger;
-
-// Export a function to create a new logger instance
+/**
+ * Create a new browser logger instance
+ * 
+ * @param config - Configuration options
+ * @returns A new BrowserLogger instance
+ */
 export function createBrowserLogger(config: Partial<ILoggerConfig> = {}): BrowserLogger {
   return new BrowserLogger(config);
 }
 
-// Export types and classes for advanced usage
-export { BrowserLogger, BrowserExecutionTracker, BrowserPerformanceMonitor }; 
+// Create a singleton instance
+const defaultBrowserLogger = new BrowserLogger();
+
+// Export the singleton instance as the default export
+export default defaultBrowserLogger;
+
+// Export classes for advanced usage
+export { BrowserLogger, BrowserPerformanceMonitor, BrowserExecutionTracker };
+
+// Add CommonJS compatibility
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = Object.assign(defaultBrowserLogger, {
+    default: defaultBrowserLogger,
+    createBrowserLogger,
+    BrowserLogger,
+    BrowserPerformanceMonitor,
+    BrowserExecutionTracker
+  });
+} 

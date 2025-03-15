@@ -3,15 +3,29 @@
   "version": "0.1.0",
   "description": "Advanced console logging & performance tracking for Node.js",
   "main": "dist/index.js",
+  "module": "dist/esm/index.js",
   "types": "dist/index.d.ts",
   "browser": "dist/browser.js",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/esm/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./browser": {
+      "require": "./dist/browser.js",
+      "import": "./dist/esm/browser.js",
+      "types": "./dist/browser.d.ts"
+    }
+  },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc",
+    "build:esm": "tsc -p tsconfig.esm.json",
     "build:browser": "tsc -p tsconfig.browser.json",
-    "build:all": "npm run build && npm run build:browser",
+    "build:all": "npm run build && npm run build:esm && npm run build:browser",
     "test": "jest",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
