@@ -24,8 +24,7 @@ jobs:
     - run: npm ci
     - run: npm run build
     - run: npm run lint
-    # Uncomment when tests are added
-    # - run: npm test
+    - run: npm test
 
   publish-npm:
     needs: build
@@ -38,7 +37,7 @@ jobs:
           node-version: '18.x'
           registry-url: 'https://registry.npmjs.org/'
       - run: npm ci
-      - run: npm run build
+      - run: npm run build:all
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} 
