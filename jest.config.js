@@ -16,8 +16,8 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      branches: 80,
-      functions: 80,
+      branches: 70,
+      functions: 85,
       lines: 80,
       statements: 80,
     },

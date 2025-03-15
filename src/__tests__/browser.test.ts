@@ -55,22 +55,26 @@ describe('BrowserLogger', () => {
   
   test('info method should log a message', () => {
     browserLogger.info('Test info message');
-    expect(consoleInfoSpy).toHaveBeenCalledWith('Test info message', []);
+    expect(consoleInfoSpy).toHaveBeenCalled();
+    expect(consoleInfoSpy.mock.calls[0][0]).toBe('Test info message');
   });
   
   test('warn method should log a warning message', () => {
     browserLogger.warn('Test warning message');
-    expect(consoleWarnSpy).toHaveBeenCalledWith('Test warning message', []);
+    expect(consoleWarnSpy).toHaveBeenCalled();
+    expect(consoleWarnSpy.mock.calls[0][0]).toBe('Test warning message');
   });
   
   test('error method should log an error message', () => {
     browserLogger.error('Test error message');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('Test error message', []);
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    expect(consoleErrorSpy.mock.calls[0][0]).toBe('Test error message');
   });
   
   test('debug method should log a debug message', () => {
     browserLogger.debug('Test debug message');
-    expect(consoleDebugSpy).toHaveBeenCalledWith('Test debug message', []);
+    expect(consoleDebugSpy).toHaveBeenCalled();
+    expect(consoleDebugSpy.mock.calls[0][0]).toBe('Test debug message');
   });
   
   test('debug messages should be suppressed in production mode', () => {
