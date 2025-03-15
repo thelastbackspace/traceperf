@@ -18,7 +18,7 @@ beforeAll(() => {
     }
   };
   
-  // @ts-ignore - Ignore type checking for the test mock
+  // @ts-expect-error - Ignore type checking for the test mock
   global.performance = mockPerformance;
 });
 

@@ -106,3 +106,4 @@ dist
 # prd.md         # Uncomment to exclude Product Requirements Document
 # architecture.md # Uncomment to exclude Architecture Document
 todo.md        # Uncomment to exclude Todo list 
+PUBLISHING.md
