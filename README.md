@@ -104,6 +104,53 @@ tracePerf.warn('Warning message'); // Not shown
 tracePerf.error('Error message'); // Shown
 ```
 
+## Browser Usage (React, Next.js, etc.)
+
+TracePerf also provides a browser-compatible version for use in frontend applications:
+
+```javascript
+// Import the browser version
+import tracePerf from 'traceperf/browser';
+
+// Use it just like the Node.js version
+tracePerf.info('This works in the browser!');
+
+// Track function performance
+function expensiveCalculation() {
+  // ...complex logic
+  return result;
+}
+
+const result = tracePerf.track(expensiveCalculation);
+```
+
+### React Component Example
+
+```jsx
+import React, { useEffect } from 'react';
+import tracePerf from 'traceperf/browser';
+
+function DataComponent() {
+  useEffect(() => {
+    tracePerf.group('Component Lifecycle');
+    tracePerf.info('Component mounted');
+    
+    // Fetch data with performance tracking
+    tracePerf.track(async () => {
+      const data = await fetchData();
+      // Process data...
+    }, { label: 'fetchAndProcessData', threshold: 300 });
+    
+    return () => {
+      tracePerf.info('Component unmounting');
+      tracePerf.groupEnd();
+    };
+  }, []);
+  
+  // Component rendering...
+}
+```
+
 ## Advanced Configuration
 
 ```javascript

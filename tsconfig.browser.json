@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2018",
+    "module": "ESNext",
+    "outDir": "./dist",
+    "lib": ["ES2018", "DOM"],
+    "moduleResolution": "node"
+  },
+  "include": ["src/browser.ts", "src/types/**/*"],
+  "exclude": ["node_modules", "**/*.test.ts", "dist"]
+} 

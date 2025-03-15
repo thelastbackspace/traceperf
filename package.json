@@ -4,16 +4,19 @@
   "description": "Advanced console logging & performance tracking for Node.js",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "browser": "dist/browser.js",
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc",
+    "build:browser": "tsc -p tsconfig.browser.json",
+    "build:all": "npm run build && npm run build:browser",
     "test": "jest",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "prepare": "husky install",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build:all",
     "dev": "tsc --watch"
   },
   "keywords": [
