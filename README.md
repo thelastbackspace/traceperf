@@ -13,6 +13,7 @@ Advanced console logging & performance tracking for Node.js applications.
 - **Conditional Logging Modes**: Different logging levels for development, staging, and production.
 - **Nested Logging**: Group related logs with indentation for better readability.
 - **Auto-Remove Debug Logs**: Automatically filter out debug logs in production.
+- **Universal Module Compatibility**: Works with both CommonJS and ESM environments.
 
 ## Installation
 
@@ -21,6 +22,8 @@ npm install traceperf
 ```
 
 ## Basic Usage
+
+### CommonJS (Node.js)
 
 ```javascript
 const tracePerf = require('traceperf');
@@ -39,6 +42,15 @@ tracePerf.group('User Authentication');
 tracePerf.info('Checking credentials');
 tracePerf.warn('Invalid password attempt');
 tracePerf.groupEnd();
+```
+
+### ESM (ECMAScript Modules)
+
+```javascript
+import tracePerf from 'traceperf';
+
+// Use the same API as with CommonJS
+tracePerf.info('This is an info message');
 ```
 
 ## Execution Flow Tracking
@@ -108,12 +120,31 @@ tracePerf.error('Error message'); // Shown
 
 TracePerf also provides a browser-compatible version for use in frontend applications:
 
+### ESM (Modern Browsers)
+
 ```javascript
 // Import the browser version
 import tracePerf from 'traceperf/browser';
 
 // Use it just like the Node.js version
 tracePerf.info('This works in the browser!');
+```
+
+### CommonJS (Bundlers with CommonJS support)
+
+```javascript
+// Import the browser version with require
+const tracePerf = require('traceperf/browser');
+
+// Use it just like the Node.js version
+tracePerf.info('This works in the browser with CommonJS bundlers!');
+```
+
+### Browser Example
+
+```javascript
+// Import using your preferred method
+import tracePerf from 'traceperf/browser';
 
 // Track function performance
 function expensiveCalculation() {
