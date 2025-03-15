@@ -122,8 +122,13 @@ const result = tracePerf.track(fetchData);</code></pre>
 
     <footer>
         <div class="container">
-            <p>&copy; 2024 TracePerf. Released under the MIT License.</p>
+            <p>&copy; <span id="current-year"></span> TracePerf. Released under the MIT License.</p>
         </div>
     </footer>
+
+    <script>
+        // Set the current year in the footer
+        document.getElementById('current-year').textContent = new Date().getFullYear();
+    </script>
 </body>
 </html> 
