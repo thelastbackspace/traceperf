@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TracePerf - Advanced Console Logging & Performance Tracking</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Add Open Graph meta tags for better social sharing -->
+    <meta property="og:title" content="TracePerf">
+    <meta property="og:description" content="Advanced console logging & performance tracking for Node.js applications.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://thelastbackspace.github.io/traceperf/">
+    <!-- Add favicon -->
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>TracePerf</h1>
+            <p class="tagline">Advanced console logging & performance tracking for Node.js</p>
+            <div class="buttons">
+                <a href="https://github.com/thelastbackspace/traceperf" class="button primary">GitHub</a>
+                <a href="#getting-started" class="button secondary">Get Started</a>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <section id="features">
+            <h2>Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3>📊 Execution Flow Tracing</h3>
+                    <p>Track function calls and visualize the execution flow with ASCII art.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>⏱️ Performance Monitoring</h3>
+                    <p>Identify slow functions and get suggestions for optimization.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🔀 Conditional Logging Modes</h3>
+                    <p>Different logging levels for development, staging, and production.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📚 Nested Logging</h3>
+                    <p>Group related logs with indentation for better readability.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🧹 Auto-Remove Debug Logs</h3>
+                    <p>Automatically filter out debug logs in production.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>📤 Multiple Output Formats</h3>
+                    <p>Support for CLI and JSON output formats.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="getting-started">
+            <h2>Getting Started</h2>
+            <h3>Installation</h3>
+            <pre><code>npm install traceperf</code></pre>
+
+            <h3>Basic Usage</h3>
+            <pre><code>const tracePerf = require('traceperf');
+
+// Basic logging
+tracePerf.info('This is an info message');
+tracePerf.warn('This is a warning message');
+tracePerf.error('This is an error message');
+tracePerf.debug('This is a debug message');
+
+// Logging with objects
+tracePerf.info('User data:', { id: 1, name: 'John Doe' });
+
+// Nested logging with groups
+tracePerf.group('User Authentication');
+tracePerf.info('Checking credentials');
+tracePerf.warn('Invalid password attempt');
+tracePerf.groupEnd();</code></pre>
+        </section>
+
+        <section id="execution-flow">
+            <h2>Execution Flow Tracking</h2>
+            <pre><code>function fetchData() {
+  processData();
+}
+
+function processData() {
+  calculateResults();
+}
+
+function calculateResults() {
+  return 'done';
+}
+
+// Track the execution of the fetchData function
+const result = tracePerf.track(fetchData);</code></pre>
+
+            <h3>Output:</h3>
+            <pre class="output"><code>Execution Flow:
+┌──────────────────────────────┐
+│         fetchData            │  ⏱  200ms
+└──────────────────────────────┘
+                │  
+                ▼  
+┌──────────────────────────────┐
+│        processData           │  ⏱  500ms ⚠️ SLOW
+└──────────────────────────────┘
+                │  
+                ▼  
+┌──────────────────────────────┐
+│      calculateResults        │  ⏱  300ms
+└──────────────────────────────┘</code></pre>
+        </section>
+
+        <section id="documentation">
+            <h2>Documentation</h2>
+            <p>For complete documentation, please visit the <a href="https://github.com/thelastbackspace/traceperf">GitHub repository</a>.</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 TracePerf. Released under the MIT License.</p>
+        </div>
+    </footer>
+</body>
+</html> 
