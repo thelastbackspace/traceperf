@@ -107,3 +107,7 @@ dist
 # architecture.md # Uncomment to exclude Architecture Document
 todo.md        # Uncomment to exclude Todo list 
 PUBLISHING.md
+post.md
+medium_blog_formatted.md
+medium_blog.md
+test-nested.js

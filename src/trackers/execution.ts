@@ -27,6 +27,8 @@ export class ExecutionTracker implements IExecutionTracker {
   private _currentExecution: ExecutionRecord | null = null;
   private _asciiGenerator: AsciiArtGenerator;
   private _defaultThreshold: number;
+  private _instrumentedFunctions: Map<Function, Function> = new Map();
+  private _isInstrumented: boolean = false;
 
   /**
    * Create a new ExecutionTracker instance
@@ -50,6 +52,7 @@ export class ExecutionTracker implements IExecutionTracker {
     const fnName = options?.label || getFunctionName(fn);
     const threshold = options?.threshold ?? this._defaultThreshold;
     const includeMemory = options?.includeMemory ?? true;
+    const enableNestedTracking = options?.enableNestedTracking ?? true;
     
     // Get memory usage before execution
     const startMemory = includeMemory ? process.memoryUsage().heapUsed : undefined;
@@ -85,9 +88,21 @@ export class ExecutionTracker implements IExecutionTracker {
     // Set this as the current execution
     this._currentExecution = execution;
     
+    // Flag to track if we're already instrumenting to avoid recursion
+    const wasInstrumented = this._isInstrumented;
+    
     try {
-      // Execute the function
-      return fn();
+      // If this is the top-level call and nested tracking is enabled, instrument the function
+      if (enableNestedTracking && !wasInstrumented) {
+        this._isInstrumented = true;
+        
+        // Instrument the function to track nested calls
+        const instrumentedFn = this.instrumentFunction(fn);
+        return instrumentedFn();
+      } else {
+        // Execute the function normally
+        return fn();
+      }
     } finally {
       // End timing
       const endTime = getHighResTime();
@@ -109,7 +124,48 @@ export class ExecutionTracker implements IExecutionTracker {
       
       // Remove from call stack
       this._callStack.pop();
+      
+      // Reset instrumentation flag if this was the top-level call
+      if (!wasInstrumented) {
+        this._isInstrumented = false;
+      }
     }
+  }
+
+  /**
+   * Instrument a function to track nested function calls
+   * 
+   * @param fn - The function to instrument
+   * @returns The instrumented function
+   */
+  private instrumentFunction<T>(fn: () => T): () => T {
+    // If we've already instrumented this function, return the instrumented version
+    if (this._instrumentedFunctions.has(fn)) {
+      return this._instrumentedFunctions.get(fn) as () => T;
+    }
+    
+    // Create a new instrumented function
+    const instrumentedFn = () => {
+      try {
+        // We can't actually modify the function at runtime to track nested calls
+        // in a generic way. The best we can do is execute the function and rely
+        // on the call stack for visualization.
+        //
+        // For proper nested function tracking, users should wrap each function
+        // they want to track with tracePerf.track() or use a more advanced
+        // instrumentation approach like aspect-oriented programming or
+        // code transformation.
+        return fn();
+      } catch (error) {
+        // Re-throw any errors
+        throw error;
+      }
+    };
+    
+    // Cache the instrumented function
+    this._instrumentedFunctions.set(fn, instrumentedFn);
+    
+    return instrumentedFn;
   }
 
   /**
@@ -128,10 +184,59 @@ export class ExecutionTracker implements IExecutionTracker {
    */
   public generateFlowChart(): string {
     // Convert execution records to execution data for the ASCII generator
-    const flatExecutions = this.flattenExecutions(this._executions);
+    const executionData = this.prepareExecutionData(this._executions);
     
     // Generate the flow chart
-    return this._asciiGenerator.generateFlowChart(flatExecutions);
+    return this._asciiGenerator.generateFlowChart(executionData);
+  }
+
+  /**
+   * Prepare execution data for the ASCII generator
+   * 
+   * @param executions - The execution records to prepare
+   * @returns A list of execution data
+   */
+  private prepareExecutionData(executions: ExecutionRecord[]): ExecutionData[] {
+    const result: ExecutionData[] = [];
+    
+    // Process each root execution
+    executions.forEach(execution => {
+      // Add the root execution
+      result.push({
+        name: execution.name,
+        duration: execution.duration,
+        isSlow: execution.isSlow,
+        memoryUsage: execution.memoryUsage,
+        level: execution.level,
+      });
+      
+      // Add children recursively
+      this.addChildrenToResult(execution.children, result);
+    });
+    
+    return result;
+  }
+
+  /**
+   * Add children to the result list
+   * 
+   * @param children - The children to add
+   * @param result - The result list
+   */
+  private addChildrenToResult(children: ExecutionRecord[], result: ExecutionData[]): void {
+    children.forEach(child => {
+      // Add the child
+      result.push({
+        name: child.name,
+        duration: child.duration,
+        isSlow: child.isSlow,
+        memoryUsage: child.memoryUsage,
+        level: child.level,
+      });
+      
+      // Add grandchildren recursively
+      this.addChildrenToResult(child.children, result);
+    });
   }
 
   /**
@@ -141,6 +246,7 @@ export class ExecutionTracker implements IExecutionTracker {
     this._executions = [];
     this._currentExecution = null;
     this._callStack.clear();
+    this._instrumentedFunctions.clear();
   }
 
   /**
@@ -150,34 +256,5 @@ export class ExecutionTracker implements IExecutionTracker {
    */
   public getExecutions(): ExecutionRecord[] {
     return [...this._executions];
-  }
-
-  /**
-   * Flatten the execution tree into a list
-   * 
-   * @param executions - The execution records to flatten
-   * @returns A flat list of execution data
-   */
-  private flattenExecutions(executions: ExecutionRecord[]): ExecutionData[] {
-    const result: ExecutionData[] = [];
-    
-    // Helper function to recursively flatten the tree
-    const flatten = (record: ExecutionRecord): void => {
-      result.push({
-        name: record.name,
-        duration: record.duration,
-        isSlow: record.isSlow,
-        memoryUsage: record.memoryUsage,
-        level: record.level,
-      });
-      
-      // Process children
-      record.children.forEach(child => flatten(child));
-    };
-    
-    // Flatten each root execution
-    executions.forEach(execution => flatten(execution));
-    
-    return result;
   }
 } 

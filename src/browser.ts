@@ -80,24 +80,54 @@ class BrowserPerformanceMonitor {
 }
 
 /**
- * Browser-compatible execution tracker
+ * Browser-compatible execution tracker for tracking function calls and generating flow charts
  */
 class BrowserExecutionTracker {
   private _callStack: string[] = [];
   private _executions: any[] = [];
   private _currentExecution: any = null;
   private _defaultThreshold: number;
+  private _instrumentedFunctions: Map<Function, Function> = new Map();
+  private _isInstrumented: boolean = false;
 
+  /**
+   * Create a new BrowserExecutionTracker instance
+   * 
+   * @param options - Tracker options
+   */
   constructor(options: { defaultThreshold?: number } = {}) {
     this._defaultThreshold = options.defaultThreshold ?? 100; // ms
   }
 
-  public track<T>(fn: () => T, options?: ITrackOptions): T {
-    const fnName = options?.label || fn.name || '<anonymous>';
-    const threshold = options?.threshold ?? this._defaultThreshold;
-    
-    // Start timing
-    const startTime = performance.now();
+  /**
+   * Generate a performance optimization suggestion based on execution duration
+   * 
+   * @param name - Function name
+   * @param duration - Execution duration in ms
+   * @returns Optimization suggestion
+   */
+  private generateSuggestion(name: string, duration: number): string {
+    if (duration > 500) {
+      return `Function "${name}" took ${duration.toFixed(2)}ms to execute. Consider optimizing or breaking it down into smaller functions.`;
+    } else if (duration > 200) {
+      return `Function "${name}" took ${duration.toFixed(2)}ms to execute. Consider optimizing if called frequently.`;
+    } else if (duration > 100) {
+      return `Function "${name}" took ${duration.toFixed(2)}ms to execute. Monitor if called in critical paths.`;
+    }
+    return '';
+  }
+
+  /**
+   * Track the execution of a function
+   * 
+   * @param fn - The function to track
+   * @param options - Options for tracking
+   * @returns The return value of the tracked function
+   */
+  public track<T>(fn: () => T, options: any = {}): T {
+    const fnName = options.label || fn.name || 'anonymous';
+    const threshold = options.threshold ?? this._defaultThreshold;
+    const enableNestedTracking = options.enableNestedTracking ?? true;
     
     // Add to call stack
     this._callStack.push(fnName);
@@ -108,7 +138,7 @@ class BrowserExecutionTracker {
       duration: 0,
       isSlow: false,
       level: this._callStack.length - 1,
-      startTime,
+      startTime: performance.now(),
       children: [],
     };
     
@@ -117,6 +147,7 @@ class BrowserExecutionTracker {
       execution.parent = this._currentExecution;
       this._currentExecution.children.push(execution);
     } else {
+      // This is a root execution
       this._executions.push(execution);
     }
     
@@ -126,17 +157,28 @@ class BrowserExecutionTracker {
     // Set this as the current execution
     this._currentExecution = execution;
     
+    // Flag to track if we're already instrumenting to avoid recursion
+    const wasInstrumented = this._isInstrumented;
+    
+    let result: T;
+    
     try {
-      // Execute the function
-      return fn();
-    } finally {
+      // If this is the top-level call and nested tracking is enabled, instrument the function
+      if (enableNestedTracking && !wasInstrumented) {
+        this._isInstrumented = true;
+        
+        // Instrument the function to track nested calls
+        const instrumentedFn = this.instrumentFunction(fn);
+        result = instrumentedFn();
+      } else {
+        // Execute the function normally
+        result = fn();
+      }
+    } catch (error) {
       // End timing
       const endTime = performance.now();
-      
-      // Calculate duration
-      execution.duration = endTime - startTime;
-      
-      // Check if it's a bottleneck
+      execution.endTime = endTime;
+      execution.duration = endTime - execution.startTime;
       execution.isSlow = execution.duration > threshold;
       
       // Restore the previous current execution
@@ -144,40 +186,163 @@ class BrowserExecutionTracker {
       
       // Remove from call stack
       this._callStack.pop();
+      
+      // Reset instrumentation flag if this was the top-level call
+      if (!wasInstrumented) {
+        this._isInstrumented = false;
+      }
+      
+      // Re-throw the error
+      throw error;
     }
+    
+    // End timing
+    const endTime = performance.now();
+    execution.endTime = endTime;
+    execution.duration = endTime - execution.startTime;
+    execution.isSlow = execution.duration > threshold;
+    
+    // Generate suggestion if slow
+    if (execution.isSlow) {
+      execution.suggestion = this.generateSuggestion(fnName, execution.duration);
+    }
+    
+    // Restore the previous current execution
+    this._currentExecution = previousExecution;
+    
+    // Remove from call stack
+    this._callStack.pop();
+    
+    // Reset instrumentation flag if this was the top-level call
+    if (!wasInstrumented) {
+      this._isInstrumented = false;
+    }
+    
+    return result;
   }
 
+  /**
+   * Instrument a function to track nested function calls
+   * 
+   * @param fn - The function to instrument
+   * @returns The instrumented function
+   */
+  private instrumentFunction<T>(fn: () => T): () => T {
+    // If we've already instrumented this function, return the instrumented version
+    if (this._instrumentedFunctions.has(fn)) {
+      return this._instrumentedFunctions.get(fn) as () => T;
+    }
+    
+    // Create a new instrumented function
+    const instrumentedFn = () => {
+      // Execute the function and track nested calls
+      try {
+        // We can't actually modify the function at runtime to track nested calls,
+        // so we'll just execute it and rely on the call stack for visualization
+        return fn();
+      } catch (error) {
+        // Re-throw any errors
+        throw error;
+      }
+    };
+    
+    // Cache the instrumented function
+    this._instrumentedFunctions.set(fn, instrumentedFn);
+    
+    return instrumentedFn;
+  }
+
+  /**
+   * Get the current call stack
+   * 
+   * @returns The current call stack
+   */
   public getCallStack(): string[] {
     return [...this._callStack];
   }
 
+  /**
+   * Generate a visual representation of the execution flow
+   * 
+   * @returns ASCII flow chart of the execution
+   */
   public generateFlowChart(): string {
-    // Simplified flow chart for browser
-    let chart = 'Execution Flow:\n';
+    let result = 'Execution Flow:\n';
     
-    const flattenExecutions = (executions: any[], level = 0): void => {
-      executions.forEach(execution => {
-        const indent = '  '.repeat(level);
-        const duration = execution.duration.toFixed(2);
-        const slowMarker = execution.isSlow ? ' ⚠️ SLOW' : '';
-        
-        chart += `${indent}${execution.name} (${duration}ms)${slowMarker}\n`;
-        
-        if (execution.children && execution.children.length > 0) {
-          flattenExecutions(execution.children, level + 1);
-        }
-      });
-    };
+    // Process each execution
+    this.prepareExecutionData(this._executions).forEach(execution => {
+      const indent = '  '.repeat(execution.level);
+      const durationStr = execution.duration.toFixed(2);
+      const slowMarker = execution.isSlow ? ' [SLOW]' : '';
+      
+      result += `${indent}→ ${execution.name} (${durationStr}ms)${slowMarker}\n`;
+      
+      // Add suggestion if available
+      if (execution.suggestion) {
+        result += `${indent}  ⚠️ ${execution.suggestion}\n`;
+      }
+    });
     
-    flattenExecutions(this._executions);
-    
-    return chart;
+    return result;
   }
 
+  /**
+   * Prepare execution data for the flow chart
+   * 
+   * @param executions - The execution records to prepare
+   * @returns A list of execution data
+   */
+  private prepareExecutionData(executions: any[]): any[] {
+    const result: any[] = [];
+    
+    // Process each root execution
+    executions.forEach(execution => {
+      // Add the root execution
+      result.push({
+        name: execution.name,
+        duration: execution.duration,
+        isSlow: execution.isSlow,
+        suggestion: execution.suggestion,
+        level: execution.level,
+      });
+      
+      // Add children recursively
+      this.addChildrenToResult(execution.children, result);
+    });
+    
+    return result;
+  }
+
+  /**
+   * Add children to the result list
+   * 
+   * @param children - The children to add
+   * @param result - The result list
+   */
+  private addChildrenToResult(children: any[], result: any[]): void {
+    children.forEach(child => {
+      // Add the child
+      result.push({
+        name: child.name,
+        duration: child.duration,
+        isSlow: child.isSlow,
+        suggestion: child.suggestion,
+        level: child.level,
+      });
+      
+      // Add grandchildren recursively
+      this.addChildrenToResult(child.children, result);
+    });
+  }
+
+  /**
+   * Clear all execution records
+   */
   public clear(): void {
     this._executions = [];
     this._currentExecution = null;
     this._callStack = [];
+    this._instrumentedFunctions.clear();
   }
 }
 

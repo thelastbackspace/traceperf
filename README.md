@@ -231,3 +231,80 @@ logger.info('Custom logger');
 ## License
 
 MIT 
+
+## Advanced Usage
+
+### Tracking Nested Function Calls
+
+TracePerf provides several approaches to track nested function calls:
+
+#### Approach 1: Manual Tracking (Recommended)
+
+The most reliable way to track nested function calls is to manually track each function:
+
+```javascript
+function fetchData() {
+  // Simulate API call
+  const data = { items: [1, 2, 3, 4, 5] };
+  
+  // Process the data with manual tracking
+  const processedData = tracePerf.track(() => {
+    // Data processing logic
+    return data.items.map(item => item * 2);
+  }, { label: "processData" });
+  
+  // Calculate results with manual tracking
+  const results = tracePerf.track(() => {
+    // Calculation logic
+    return processedData.reduce((sum, item) => sum + item, 0);
+  }, { label: "calculateResults" });
+  
+  return results;
+}
+
+// Track the main function
+tracePerf.track(fetchData, { label: "fetchData" });
+```
+
+This approach gives you the most control and provides accurate timing for each function.
+
+#### Approach 2: Wrapper Functions
+
+You can create tracked versions of your functions:
+
+```javascript
+// Original functions
+function processData(data) {
+  return data.items.map(item => item * 2);
+}
+
+function calculateResults(processedData) {
+  return processedData.reduce((sum, item) => sum + item, 0);
+}
+
+// Create tracked versions
+const trackedProcessData = (data) => {
+  return tracePerf.track(() => processData(data), { label: "processData" });
+};
+
+const trackedCalculateResults = (data) => {
+  return tracePerf.track(() => calculateResults(data), { label: "calculateResults" });
+};
+
+// Use tracked versions in your main function
+function fetchData() {
+  const data = { items: [1, 2, 3, 4, 5] };
+  const processedData = trackedProcessData(data);
+  const results = trackedCalculateResults(processedData);
+  return results;
+}
+
+// Track the main function
+tracePerf.track(fetchData, { label: "fetchData" });
+```
+
+This approach allows you to keep your original functions clean while still tracking their performance.
+
+### Customizing Performance Thresholds
+
+// ... existing code ... 
