@@ -1,13 +1,40 @@
 # Changelog
 
-All notable changes to the TracePerf project will be documented in this file.
+All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2025-03-16
+
+### Added
+- New `createTrackable` method for creating tracked versions of functions
+- Improved nested function tracking with a simpler, more reliable approach
+- Updated documentation with examples of nested function tracking
+- New example file demonstrating nested function tracking
+
+### Changed
+- Simplified the execution tracking implementation
+- Removed the experimental proxy-based tracking approach
+- Updated the README with clearer examples and documentation
+
+## [0.1.3] - 2025-03-16
+
+### Added
+- Automatic tracking of nested function calls without manual instrumentation
+- New `autoTracking` option to control automatic function detection
+- Source code analysis to identify and track nested function calls
+
+### Enhanced
+- Improved nested function detection with regex-based source code analysis
+- Better handling of global scope functions in both Node.js and browser environments
+
 ## [0.1.2] - 2025-03-16
 
 ### Added
+- Automatic tracking of nested function calls without manual instrumentation
+- New `autoTracking` option to control automatic function detection
+- Source code analysis to identify and track nested function calls
 - Support for tracking nested function calls with two recommended approaches
 - New `enableNestedTracking` option in `ITrackOptions` interface
 - Comprehensive documentation for nested function tracking in README

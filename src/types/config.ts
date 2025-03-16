@@ -70,47 +70,67 @@ export interface ITrackOptions {
    * Whether to suppress logging for this tracking
    */
   silent?: boolean;
+  
+  /**
+   * Whether to enable nested tracking
+   * 
+   * When enabled, TracePerf will track nested function calls
+   * if they are also wrapped with track().
+   * 
+   * @default true
+   */
+  enableNestedTracking?: boolean;
 }
 
 /**
- * LoggerConfig - Configuration options for the logger
+ * Logger configuration
  */
 export interface ILoggerConfig {
   /**
    * Operational mode
-   * @default 'dev'
+   * 
+   * - dev: All logs are shown
+   * - staging: Only warn and error logs are shown
+   * - prod: Only error logs are shown
    */
-  mode?: LogMode;
+  mode: LogMode;
   
   /**
-   * Minimum log level to display
-   * @default 'debug'
+   * Minimum log level to show
    */
-  level?: LogLevel;
+  level: LogLevel;
   
   /**
-   * Whether to colorize output
-   * @default true
+   * Whether to colorize logs
    */
-  colorize?: boolean;
+  colorize: boolean;
   
   /**
    * Whether to include timestamps in logs
+   */
+  timestamp: boolean;
+  
+  /**
+   * Performance threshold in milliseconds
+   * 
+   * Functions that take longer than this threshold will be marked as bottlenecks
+   */
+  performanceThreshold: number;
+  
+  /**
+   * Indentation size for nested logs
+   */
+  indentSize: number;
+  
+  /**
+   * Whether to automatically track nested function calls
+   * 
+   * When enabled, TracePerf will automatically track nested function calls
+   * using a proxy-based approach.
+   * 
    * @default true
    */
-  timestamp?: boolean;
-  
-  /**
-   * Default performance threshold in milliseconds
-   * @default 100
-   */
-  performanceThreshold?: number;
-  
-  /**
-   * Number of spaces for each indentation level
-   * @default 2
-   */
-  indentSize?: number;
+  autoTracking?: boolean;
   
   /**
    * Log output destinations

@@ -237,75 +237,167 @@ MIT
 
 ### Tracking Nested Function Calls
 
-TracePerf provides several approaches to track nested function calls:
-
-#### Approach 1: Manual Tracking (Recommended)
-
-The most reliable way to track nested function calls is to manually track each function:
+TracePerf now automatically tracks nested function calls without requiring manual instrumentation. When you track a function, TracePerf will analyze its source code to identify and track any nested function calls.
 
 ```javascript
 function fetchData() {
-  // Simulate API call
-  const data = { items: [1, 2, 3, 4, 5] };
-  
-  // Process the data with manual tracking
-  const processedData = tracePerf.track(() => {
-    // Data processing logic
-    return data.items.map(item => item * 2);
+  // These nested functions will be automatically tracked
+  processData();
+  calculateResults();
+}
+
+function processData() {
+  // Some processing logic
+}
+
+function calculateResults() {
+  // Some calculation logic
+}
+
+// Just track the top-level function
+tracePerf.track(fetchData);
+```
+
+This will produce a complete execution flow chart showing all nested function calls:
+
+```
+Execution Flow:
+┌──────────────────────────────┐
+│         fetchData          │  ⏱  200ms
+└──────────────────────────────┘
+                │  
+                ▼  
+┌──────────────────────────────┐
+│        processData         │  ⏱  500ms ⚠️ SLOW
+└──────────────────────────────┘
+                │  
+                ▼  
+┌──────────────────────────────┐
+│      calculateResults      │  ⏱  300ms
+└──────────────────────────────┘
+```
+
+#### Controlling Automatic Tracking
+
+You can control automatic tracking with the following options:
+
+```javascript
+// Disable automatic tracking for a specific function
+tracePerf.track(fetchData, { autoTracking: false });
+
+// Disable nested tracking entirely
+tracePerf.track(fetchData, { enableNestedTracking: false });
+```
+
+For more complex scenarios, you can still use the manual tracking approaches:
+
+#### Manual Tracking Approach
+
+```javascript
+function fetchData() {
+  // Manually track nested functions
+  tracePerf.track(() => {
+    // Process data logic
   }, { label: "processData" });
   
-  // Calculate results with manual tracking
-  const results = tracePerf.track(() => {
-    // Calculation logic
-    return processedData.reduce((sum, item) => sum + item, 0);
+  tracePerf.track(() => {
+    // Calculate results logic
   }, { label: "calculateResults" });
-  
-  return results;
 }
 
-// Track the main function
-tracePerf.track(fetchData, { label: "fetchData" });
+tracePerf.track(fetchData);
 ```
 
-This approach gives you the most control and provides accurate timing for each function.
-
-#### Approach 2: Wrapper Functions
-
-You can create tracked versions of your functions:
+#### Wrapper Functions Approach
 
 ```javascript
-// Original functions
-function processData(data) {
-  return data.items.map(item => item * 2);
-}
-
-function calculateResults(processedData) {
-  return processedData.reduce((sum, item) => sum + item, 0);
-}
-
-// Create tracked versions
-const trackedProcessData = (data) => {
-  return tracePerf.track(() => processData(data), { label: "processData" });
+// Create tracked versions of functions
+const trackedProcessData = () => {
+  return tracePerf.track(processData, { label: "processData" });
 };
 
-const trackedCalculateResults = (data) => {
-  return tracePerf.track(() => calculateResults(data), { label: "calculateResults" });
-};
-
-// Use tracked versions in your main function
 function fetchData() {
-  const data = { items: [1, 2, 3, 4, 5] };
-  const processedData = trackedProcessData(data);
-  const results = trackedCalculateResults(processedData);
-  return results;
+  // Use tracked versions
+  trackedProcessData();
 }
 
-// Track the main function
-tracePerf.track(fetchData, { label: "fetchData" });
+tracePerf.track(fetchData);
 ```
-
-This approach allows you to keep your original functions clean while still tracking their performance.
 
 ### Customizing Performance Thresholds
 
 // ... existing code ... 
+
+## Nested Function Tracking
+
+TracePerf supports tracking nested function calls, allowing you to see the complete execution flow of your application. There are two recommended approaches for tracking nested functions:
+
+### Using `createTrackable`
+
+The simplest and most reliable approach is to use the `createTrackable` method to create tracked versions of your functions:
+
+```javascript
+const tracePerf = require('traceperf');
+
+// Original functions
+function fetchData() {
+  processData();
+  return 'data';
+}
+
+function processData() {
+  calculateResults();
+}
+
+function calculateResults() {
+  // Do some work
+}
+
+// Create tracked versions
+const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchData' });
+const trackedProcessData = tracePerf.createTrackable(processData, { label: 'processData' });
+const trackedCalculateResults = tracePerf.createTrackable(calculateResults, { label: 'calculateResults' });
+
+// Use the tracked versions
+trackedFetchData();
+```
+
+### Using Object Methods
+
+For object-oriented code, you can create tracked versions of methods:
+
+```javascript
+const tracePerf = require('traceperf');
+
+// Define your application functions
+const app = {
+  // Original functions
+  _fetchData() {
+    this.processData();
+    return 'data';
+  },
+  
+  _processData() {
+    this.calculateResults();
+  },
+  
+  _calculateResults() {
+    // Do some work
+  },
+  
+  // Tracked versions
+  fetchData: null,
+  processData: null,
+  calculateResults: null
+};
+
+// Create tracked versions of all functions
+app.fetchData = tracePerf.createTrackable(app._fetchData.bind(app), { label: 'fetchData' });
+app.processData = tracePerf.createTrackable(app._processData.bind(app), { label: 'processData' });
+app.calculateResults = tracePerf.createTrackable(app._calculateResults.bind(app), { label: 'calculateResults' });
+
+// Use the tracked versions
+app.fetchData();
+```
+
+This approach ensures that all function calls are properly tracked and the execution flow is preserved. 

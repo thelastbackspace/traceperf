@@ -73,4 +73,17 @@ describe('Logger', () => {
     expect(consoleLogSpy.mock.calls[3][0]).toContain('Outside again');
     expect(consoleLogSpy.mock.calls[3][0]).not.toContain('  Outside again');
   });
+  
+  test('createTrackable should delegate to the execution tracker', () => {
+    // Mock the execution tracker's createTrackable method
+    const mockCreateTrackable = jest.fn().mockReturnValue(() => 'tracked result');
+    (logger as any)._executionTracker.createTrackable = mockCreateTrackable;
+    
+    const mockFn = jest.fn().mockReturnValue('result');
+    const trackable = logger.createTrackable(mockFn, { label: 'testFunction' });
+    const result = trackable();
+    
+    expect(result).toBe('tracked result');
+    expect(mockCreateTrackable).toHaveBeenCalledWith(mockFn, { label: 'testFunction' });
+  });
 }); 

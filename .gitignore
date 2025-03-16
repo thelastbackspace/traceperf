@@ -111,3 +111,16 @@ post.md
 medium_blog_formatted.md
 medium_blog.md
 test-nested.js
+final-solution.js
+direct-tracking-example.js
+monkey-patch-example.js
+auto-tracking-example.js
+auto-proxy-example.js
+manual-tracking-example.js
+decorator-example.js
+nested-example.js
+original-example.js
+simple-decorator-example.js
+simple-example.js
+proxy-tracking-example.js
+wrapper-tracking-example.js

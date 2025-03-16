@@ -27,8 +27,7 @@ export class ExecutionTracker implements IExecutionTracker {
   private _currentExecution: ExecutionRecord | null = null;
   private _asciiGenerator: AsciiArtGenerator;
   private _defaultThreshold: number;
-  private _instrumentedFunctions: Map<Function, Function> = new Map();
-  private _isInstrumented: boolean = false;
+  private _globalScope: Record<string, any>;
 
   /**
    * Create a new ExecutionTracker instance
@@ -39,6 +38,11 @@ export class ExecutionTracker implements IExecutionTracker {
     this._callStack = new CallStackManager();
     this._asciiGenerator = new AsciiArtGenerator({ boxWidth: options.boxWidth });
     this._defaultThreshold = options.defaultThreshold ?? 100; // ms
+    
+    // Get a reference to the global scope (works in both Node.js and browsers)
+    this._globalScope = typeof window !== 'undefined' ? window : 
+                        typeof global !== 'undefined' ? (global as unknown as Record<string, any>) : 
+                        {} as Record<string, any>;
   }
 
   /**
@@ -74,7 +78,7 @@ export class ExecutionTracker implements IExecutionTracker {
     };
     
     // Set parent-child relationship
-    if (this._currentExecution) {
+    if (this._currentExecution && enableNestedTracking) {
       execution.parent = this._currentExecution;
       this._currentExecution.children.push(execution);
     } else {
@@ -88,21 +92,9 @@ export class ExecutionTracker implements IExecutionTracker {
     // Set this as the current execution
     this._currentExecution = execution;
     
-    // Flag to track if we're already instrumenting to avoid recursion
-    const wasInstrumented = this._isInstrumented;
-    
     try {
-      // If this is the top-level call and nested tracking is enabled, instrument the function
-      if (enableNestedTracking && !wasInstrumented) {
-        this._isInstrumented = true;
-        
-        // Instrument the function to track nested calls
-        const instrumentedFn = this.instrumentFunction(fn);
-        return instrumentedFn();
-      } else {
-        // Execute the function normally
-        return fn();
-      }
+      // Execute the function
+      return fn();
     } finally {
       // End timing
       const endTime = getHighResTime();
@@ -124,48 +116,32 @@ export class ExecutionTracker implements IExecutionTracker {
       
       // Remove from call stack
       this._callStack.pop();
-      
-      // Reset instrumentation flag if this was the top-level call
-      if (!wasInstrumented) {
-        this._isInstrumented = false;
-      }
     }
   }
 
   /**
-   * Instrument a function to track nested function calls
+   * Create a trackable version of a function
    * 
-   * @param fn - The function to instrument
-   * @returns The instrumented function
+   * This is a helper method to create a tracked version of a function
+   * that can be used for nested function tracking.
+   * 
+   * @param fn - The function to make trackable
+   * @param options - Options for tracking
+   * @returns A tracked version of the function
    */
-  private instrumentFunction<T>(fn: () => T): () => T {
-    // If we've already instrumented this function, return the instrumented version
-    if (this._instrumentedFunctions.has(fn)) {
-      return this._instrumentedFunctions.get(fn) as () => T;
-    }
+  public createTrackable<T extends (...args: any[]) => any>(
+    fn: T, 
+    options?: Omit<ITrackOptions, 'label'> & { label?: string }
+  ): (...args: Parameters<T>) => ReturnType<T> {
+    const self = this;
+    const fnName = options?.label || fn.name || 'anonymous';
     
-    // Create a new instrumented function
-    const instrumentedFn = () => {
-      try {
-        // We can't actually modify the function at runtime to track nested calls
-        // in a generic way. The best we can do is execute the function and rely
-        // on the call stack for visualization.
-        //
-        // For proper nested function tracking, users should wrap each function
-        // they want to track with tracePerf.track() or use a more advanced
-        // instrumentation approach like aspect-oriented programming or
-        // code transformation.
-        return fn();
-      } catch (error) {
-        // Re-throw any errors
-        throw error;
-      }
+    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+      return self.track(() => fn.apply(this, args), { 
+        ...options,
+        label: fnName
+      }) as ReturnType<T>;
     };
-    
-    // Cache the instrumented function
-    this._instrumentedFunctions.set(fn, instrumentedFn);
-    
-    return instrumentedFn;
   }
 
   /**
@@ -246,7 +222,6 @@ export class ExecutionTracker implements IExecutionTracker {
     this._executions = [];
     this._currentExecution = null;
     this._callStack.clear();
-    this._instrumentedFunctions.clear();
   }
 
   /**

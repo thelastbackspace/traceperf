@@ -70,6 +70,21 @@ export interface ILogger {
    * @returns The return value of the tracked function
    */
   track<T>(fn: () => T, options?: ITrackOptions): T;
+  
+  /**
+   * Create a trackable version of a function
+   * 
+   * This is a helper method to create a tracked version of a function
+   * that can be used for nested function tracking.
+   * 
+   * @param fn - The function to make trackable
+   * @param options - Options for tracking
+   * @returns A tracked version of the function
+   */
+  createTrackable<T extends (...args: any[]) => any>(
+    fn: T, 
+    options?: any
+  ): (...args: Parameters<T>) => ReturnType<T>;
 }
 
 /**

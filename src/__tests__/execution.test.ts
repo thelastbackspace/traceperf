@@ -78,4 +78,53 @@ describe('ExecutionTracker', () => {
     flowChart = executionTracker.generateFlowChart();
     expect(flowChart).not.toContain('testFunction');
   });
+});
+
+describe('createTrackable', () => {
+  it('should create a trackable version of a function', () => {
+    const tracker = new ExecutionTracker();
+    const mockFn = jest.fn().mockReturnValue('result');
+    const trackable = tracker.createTrackable(mockFn, { label: 'testFunction' });
+    
+    const result = trackable();
+    
+    expect(result).toBe('result');
+    expect(mockFn).toHaveBeenCalled();
+  });
+  
+  it('should pass arguments to the original function', () => {
+    const tracker = new ExecutionTracker();
+    const mockFn = jest.fn().mockReturnValue('result');
+    const trackable = tracker.createTrackable(mockFn);
+    
+    trackable('arg1', 'arg2');
+    
+    expect(mockFn).toHaveBeenCalledWith('arg1', 'arg2');
+  });
+  
+  it('should use the function name if no label is provided', () => {
+    const tracker = new ExecutionTracker();
+    const namedFunction = function testFunction() { return 'result'; };
+    const trackable = tracker.createTrackable(namedFunction);
+    
+    const spy = jest.spyOn(tracker, 'track');
+    trackable();
+    
+    expect(spy).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
+      label: 'testFunction'
+    }));
+  });
+  
+  it('should preserve the this context', () => {
+    const tracker = new ExecutionTracker();
+    const obj = {
+      value: 'test',
+      method() { return this.value; }
+    };
+    
+    const trackableMethod = tracker.createTrackable(obj.method.bind(obj));
+    const result = trackableMethod();
+    
+    expect(result).toBe('test');
+  });
 }); 

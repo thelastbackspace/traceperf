@@ -164,4 +164,70 @@ describe('BrowserExecutionTracker', () => {
     flowChart = executionTracker.generateFlowChart();
     expect(flowChart).not.toContain('testFunction');
   });
+});
+
+describe('BrowserExecutionTracker.createTrackable', () => {
+  it('should create a trackable version of a function', () => {
+    const tracker = new BrowserExecutionTracker();
+    const mockFn = jest.fn().mockReturnValue('result');
+    const trackable = tracker.createTrackable(mockFn, { label: 'testFunction' });
+    
+    const result = trackable();
+    
+    expect(result).toBe('result');
+    expect(mockFn).toHaveBeenCalled();
+  });
+  
+  it('should pass arguments to the original function', () => {
+    const tracker = new BrowserExecutionTracker();
+    const mockFn = jest.fn().mockReturnValue('result');
+    const trackable = tracker.createTrackable(mockFn);
+    
+    trackable('arg1', 'arg2');
+    
+    expect(mockFn).toHaveBeenCalledWith('arg1', 'arg2');
+  });
+  
+  it('should use the function name if no label is provided', () => {
+    const tracker = new BrowserExecutionTracker();
+    const namedFunction = function testFunction() { return 'result'; };
+    const trackable = tracker.createTrackable(namedFunction);
+    
+    const spy = jest.spyOn(tracker, 'track');
+    trackable();
+    
+    expect(spy).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
+      label: 'testFunction'
+    }));
+  });
+  
+  it('should preserve the this context', () => {
+    const tracker = new BrowserExecutionTracker();
+    const obj = {
+      value: 'test',
+      method() { return this.value; }
+    };
+    
+    const trackableMethod = tracker.createTrackable(obj.method.bind(obj));
+    const result = trackableMethod();
+    
+    expect(result).toBe('test');
+  });
+});
+
+describe('BrowserLogger.createTrackable', () => {
+  it('should delegate to the execution tracker', () => {
+    const logger = new BrowserLogger();
+    const mockFn = jest.fn().mockReturnValue('result');
+    
+    // Mock the execution tracker's createTrackable method
+    const mockCreateTrackable = jest.fn().mockReturnValue(() => 'tracked result');
+    (logger as any)._executionTracker.createTrackable = mockCreateTrackable;
+    
+    const trackable = logger.createTrackable(mockFn, { label: 'testFunction' });
+    const result = trackable();
+    
+    expect(result).toBe('tracked result');
+    expect(mockCreateTrackable).toHaveBeenCalledWith(mockFn, { label: 'testFunction' });
+  });
 }); 

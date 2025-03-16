@@ -141,7 +141,7 @@ export class Logger implements ILogger {
   }
 
   /**
-   * Track the execution of a function and log performance metrics
+   * Track the execution of a function
    * 
    * @param fn - The function to track
    * @param options - Options for tracking
@@ -157,13 +157,29 @@ export class Logger implements ILogger {
     if (!silent) {
       const flowChart = this._executionTracker.generateFlowChart();
       
-      // Log the flow chart directly to the console
-      // This bypasses the formatters to preserve the ASCII art
-      console.log('\nExecution Flow:');
+      // Log the flow chart directly to console to preserve ASCII art
+      // Skip formatters to avoid messing up the ASCII art
       console.log(flowChart);
     }
     
     return result;
+  }
+
+  /**
+   * Create a trackable version of a function
+   * 
+   * This is a helper method to create a tracked version of a function
+   * that can be used for nested function tracking.
+   * 
+   * @param fn - The function to make trackable
+   * @param options - Options for tracking
+   * @returns A tracked version of the function
+   */
+  public createTrackable<T extends (...args: any[]) => any>(
+    fn: T, 
+    options?: Omit<ITrackOptions, 'label'> & { label?: string }
+  ): (...args: Parameters<T>) => ReturnType<T> {
+    return this._executionTracker.createTrackable(fn, options);
   }
 
   /**
