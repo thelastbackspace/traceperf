@@ -237,11 +237,17 @@ MIT
 
 ### Tracking Nested Function Calls
 
-TracePerf now automatically tracks nested function calls without requiring manual instrumentation. When you track a function, TracePerf will analyze its source code to identify and track any nested function calls.
+TracePerf provides two approaches for tracking nested function calls, allowing you to visualize the complete execution flow of your application:
+
+1. **Using the `createTrackable` method** (recommended)
+2. **Using nested `track` calls**
+
+#### Using createTrackable (Recommended)
+
+The `createTrackable` method creates tracked versions of your functions that can be used in place of the original functions:
 
 ```javascript
 function fetchData() {
-  // These nested functions will be automatically tracked
   processData();
   calculateResults();
 }
@@ -254,8 +260,17 @@ function calculateResults() {
   // Some calculation logic
 }
 
-// Just track the top-level function
-tracePerf.track(fetchData);
+// Create tracked versions of all functions
+const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchData' });
+const trackedProcessData = tracePerf.createTrackable(processData, { label: 'processData' });
+const trackedCalculateResults = tracePerf.createTrackable(calculateResults, { label: 'calculateResults' });
+
+// Replace the global references to enable tracking
+global.processData = trackedProcessData;
+global.calculateResults = trackedCalculateResults;
+
+// Execute the tracked top-level function
+trackedFetchData();
 ```
 
 This will produce a complete execution flow chart showing all nested function calls:
@@ -277,127 +292,63 @@ Execution Flow:
 └──────────────────────────────┘
 ```
 
-#### Controlling Automatic Tracking
+#### Using Nested Track Calls
 
-You can control automatic tracking with the following options:
+For more complex scenarios, you can use nested `track` calls:
 
 ```javascript
-// Disable automatic tracking for a specific function
-tracePerf.track(fetchData, { autoTracking: false });
+tracePerf.track(() => {
+  // Top-level function logic
+  
+  tracePerf.track(() => {
+    // Nested function logic
+    
+    tracePerf.track(() => {
+      // Deeply nested function logic
+    }, { label: 'deeplyNestedFunction' });
+    
+  }, { label: 'nestedFunction' });
+  
+}, { label: 'topLevelFunction' });
+```
 
+#### Controlling Nested Tracking
+
+You can control nested tracking with the following option:
+
+```javascript
 // Disable nested tracking entirely
 tracePerf.track(fetchData, { enableNestedTracking: false });
 ```
 
-For more complex scenarios, you can still use the manual tracking approaches:
+For more examples, see the `examples/nested-tracking.js` and `examples/auto-tracking-example.js` files in the repository.
 
-#### Manual Tracking Approach
+## API Reference for Nested Tracking
 
-```javascript
-function fetchData() {
-  // Manually track nested functions
-  tracePerf.track(() => {
-    // Process data logic
-  }, { label: "processData" });
-  
-  tracePerf.track(() => {
-    // Calculate results logic
-  }, { label: "calculateResults" });
-}
-
-tracePerf.track(fetchData);
-```
-
-#### Wrapper Functions Approach
+### createTrackable
 
 ```javascript
-// Create tracked versions of functions
-const trackedProcessData = () => {
-  return tracePerf.track(processData, { label: "processData" });
-};
-
-function fetchData() {
-  // Use tracked versions
-  trackedProcessData();
-}
-
-tracePerf.track(fetchData);
+tracePerf.createTrackable(fn, options)
 ```
 
-### Customizing Performance Thresholds
+Creates a tracked version of a function that can be used for nested function tracking.
 
-// ... existing code ... 
+- `fn`: The function to make trackable
+- `options`: Options for tracking
+  - `label`: Custom label for the function (defaults to function name)
+  - `threshold`: Performance threshold in milliseconds
+  - `includeMemory`: Whether to include memory usage tracking
+  - `enableNestedTracking`: Whether to enable nested tracking (default: true)
 
-## Nested Function Tracking
+Returns a new function that, when called, will track the execution of the original function.
 
-TracePerf supports tracking nested function calls, allowing you to see the complete execution flow of your application. There are two recommended approaches for tracking nested functions:
+### Track Options for Nested Tracking
 
-### Using `createTrackable`
-
-The simplest and most reliable approach is to use the `createTrackable` method to create tracked versions of your functions:
+When using the `track` method, you can control nested tracking with these options:
 
 ```javascript
-const tracePerf = require('traceperf');
-
-// Original functions
-function fetchData() {
-  processData();
-  return 'data';
-}
-
-function processData() {
-  calculateResults();
-}
-
-function calculateResults() {
-  // Do some work
-}
-
-// Create tracked versions
-const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchData' });
-const trackedProcessData = tracePerf.createTrackable(processData, { label: 'processData' });
-const trackedCalculateResults = tracePerf.createTrackable(calculateResults, { label: 'calculateResults' });
-
-// Use the tracked versions
-trackedFetchData();
-```
-
-### Using Object Methods
-
-For object-oriented code, you can create tracked versions of methods:
-
-```javascript
-const tracePerf = require('traceperf');
-
-// Define your application functions
-const app = {
-  // Original functions
-  _fetchData() {
-    this.processData();
-    return 'data';
-  },
-  
-  _processData() {
-    this.calculateResults();
-  },
-  
-  _calculateResults() {
-    // Do some work
-  },
-  
-  // Tracked versions
-  fetchData: null,
-  processData: null,
-  calculateResults: null
-};
-
-// Create tracked versions of all functions
-app.fetchData = tracePerf.createTrackable(app._fetchData.bind(app), { label: 'fetchData' });
-app.processData = tracePerf.createTrackable(app._processData.bind(app), { label: 'processData' });
-app.calculateResults = tracePerf.createTrackable(app._calculateResults.bind(app), { label: 'calculateResults' });
-
-// Use the tracked versions
-app.fetchData();
-```
-
-This approach ensures that all function calls are properly tracked and the execution flow is preserved. 
+tracePerf.track(fn, {
+  // ... other options
+  enableNestedTracking: true, // Enable/disable nested tracking
+});
+``` 
