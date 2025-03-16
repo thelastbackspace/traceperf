@@ -9,6 +9,7 @@ Advanced console logging & performance tracking for Node.js applications.
 
 - **Structured and Visually Appealing Logs**: A better alternative to `console.log()` with colors, icons, and formatting.
 - **Execution Flow Tracing**: Track function calls and visualize the execution flow with ASCII art.
+- **Nested Function Tracking**: Multiple approaches to track nested function calls with detailed visualization.
 - **Performance Bottleneck Detection**: Identify slow functions and get suggestions for optimization.
 - **Conditional Logging Modes**: Different logging levels for development, staging, and production.
 - **Nested Logging**: Group related logs with indentation for better readability.

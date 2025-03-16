@@ -5,6 +5,19 @@ All notable changes to the TracePerf project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2025-03-16
+
+### Added
+- Support for tracking nested function calls with two recommended approaches
+- New `enableNestedTracking` option in `ITrackOptions` interface
+- Comprehensive documentation for nested function tracking in README
+- Example script demonstrating different approaches to nested function tracking
+
+### Fixed
+- Fixed issue with nested function calls not being properly tracked in execution flow
+- Improved parent-child relationship tracking in execution records
+- Enhanced flow chart visualization for nested function calls
+
 ## [0.1.1] - 2025-03-16
 
 ### Added
