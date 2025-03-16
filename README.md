@@ -54,43 +54,7 @@ import tracePerf from 'traceperf';
 tracePerf.info('This is an info message');
 ```
 
-## Execution Flow Tracking
 
-```javascript
-function fetchData() {
-  processData();
-}
-
-function processData() {
-  calculateResults();
-}
-
-function calculateResults() {
-  return 'done';
-}
-
-// Track the execution of the fetchData function
-const result = tracePerf.track(fetchData);
-```
-
-Output:
-
-```
-Execution Flow:
-┌──────────────────────────────┐
-│         fetchData            │  ⏱  200ms
-└──────────────────────────────┘
-                │  
-                ▼  
-┌──────────────────────────────┐
-│        processData           │  ⏱  500ms ⚠️ SLOW
-└──────────────────────────────┘
-                │  
-                ▼  
-┌──────────────────────────────┐
-│      calculateResults        │  ⏱  300ms
-└──────────────────────────────┘
-```
 
 ## Conditional Logging Modes
 
@@ -182,56 +146,6 @@ function DataComponent() {
   // Component rendering...
 }
 ```
-
-## Advanced Configuration
-
-```javascript
-const { createLogger } = require('traceperf');
-
-// Create a custom logger instance
-const logger = createLogger({
-  mode: 'dev',
-  level: 'debug',
-  colorize: true,
-  timestamp: true,
-  performanceThreshold: 100, // ms
-  indentSize: 2,
-});
-
-// Use the custom logger
-logger.info('Custom logger');
-```
-
-## API Reference
-
-### Logging Methods
-
-- `info(message, ...args)`: Log an informational message
-- `warn(message, ...args)`: Log a warning message
-- `error(message, ...args)`: Log an error message
-- `debug(message, ...args)`: Log a debug message (filtered in production)
-
-### Grouping
-
-- `group(label)`: Start a new log group with the given label
-- `groupEnd()`: End the current log group
-
-### Execution Tracking
-
-- `track(fn, options)`: Track the execution of a function and log performance metrics
-  - `options.label`: Custom label for the tracked function
-  - `options.threshold`: Performance threshold in milliseconds
-  - `options.includeMemory`: Whether to include memory usage tracking
-  - `options.silent`: Whether to suppress logging for this tracking
-
-### Configuration
-
-- `setMode(mode)`: Set the operational mode ('dev', 'staging', 'prod')
-- `getMode()`: Get the current operational mode
-
-## License
-
-MIT 
 
 ## Advanced Usage
 
@@ -352,3 +266,52 @@ tracePerf.track(fn, {
   enableNestedTracking: true, // Enable/disable nested tracking
 });
 ``` 
+
+```javascript
+const { createLogger } = require('traceperf');
+
+// Create a custom logger instance
+const logger = createLogger({
+  mode: 'dev',
+  level: 'debug',
+  colorize: true,
+  timestamp: true,
+  performanceThreshold: 100, // ms
+  indentSize: 2,
+});
+
+// Use the custom logger
+logger.info('Custom logger');
+```
+
+## API Reference
+
+### Logging Methods
+
+- `info(message, ...args)`: Log an informational message
+- `warn(message, ...args)`: Log a warning message
+- `error(message, ...args)`: Log an error message
+- `debug(message, ...args)`: Log a debug message (filtered in production)
+
+### Grouping
+
+- `group(label)`: Start a new log group with the given label
+- `groupEnd()`: End the current log group
+
+### Execution Tracking
+
+- `track(fn, options)`: Track the execution of a function and log performance metrics
+  - `options.label`: Custom label for the tracked function
+  - `options.threshold`: Performance threshold in milliseconds
+  - `options.includeMemory`: Whether to include memory usage tracking
+  - `options.silent`: Whether to suppress logging for this tracking
+
+### Configuration
+
+- `setMode(mode)`: Set the operational mode ('dev', 'staging', 'prod')
+- `getMode()`: Get the current operational mode
+
+## License
+
+MIT 
+

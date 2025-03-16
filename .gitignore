@@ -114,7 +114,7 @@ test-nested.js
 final-solution.js
 direct-tracking-example.js
 monkey-patch-example.js
-auto-tracking-example.js
+
 auto-proxy-example.js
 manual-tracking-example.js
 decorator-example.js
