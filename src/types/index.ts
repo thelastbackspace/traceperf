@@ -2,39 +2,43 @@ export * from './config';
 export * from './logger';
 
 /**
- * Options for tracking function execution
+ * Interface for TracePerf configuration
+ */
+export interface ITracePerfConfig {
+  /** Tracking mode for balancing performance vs detail */
+  trackingMode?: string;
+  /** Whether to suppress console output */
+  silent?: boolean;
+  /** Whether to track memory usage */
+  trackMemory?: boolean;
+  /** Whether to enable nested function tracking */
+  enableNestedTracking?: boolean;
+  /** Minimum duration threshold in microseconds */
+  threshold?: number;
+  /** Sampling rate (0.0-1.0) for reducing overhead */
+  sampleRate?: number;
+}
+
+/**
+ * Interface for tracking options
  */
 export interface ITrackOptions {
-  /**
-   * Custom label for the function
-   */
+  /** Custom label for the tracked function */
   label?: string;
-  
-  /**
-   * Performance threshold in milliseconds
-   */
-  threshold?: number;
-  
-  /**
-   * Whether to include memory usage in the tracking
-   */
-  includeMemory?: boolean;
-  
-  /**
-   * Whether to track nested function calls
-   * 
-   * When enabled, TracePerf will track nested function calls that are made
-   * within the tracked function. This requires either using the createTrackable
-   * method or explicitly wrapping nested function calls with track().
-   * 
-   * @default true
-   */
-  enableNestedTracking?: boolean;
-  
-  /**
-   * Whether to suppress logging
-   */
+  /** Override default tracking mode */
+  trackingMode?: string;
+  /** Override default silent setting */
   silent?: boolean;
+  /** Override default memory tracking */
+  trackMemory?: boolean;
+  /** Override default nested tracking */
+  enableNestedTracking?: boolean;
+  /** Minimum duration threshold in microseconds */
+  threshold?: number;
+  /** Sampling rate (0.0-1.0) for reducing overhead */
+  sampleRate?: number;
+  /** Any other options */
+  [key: string]: any;
 }
 
 /**

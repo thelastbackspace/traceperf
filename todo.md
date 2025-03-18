@@ -107,4 +107,44 @@
 - [ ] Design logo and branding
 - [ ] Prepare conference/meetup presentations
 - [ ] Create video tutorials
-- [ ] Set up community discussion channels 
+- [ ] Set up community discussion channels
+
+## Next Release (v0.2.1)
+
+### Features
+- [ ] Implement visual flamegraph for execution flow visualization
+- [ ] Add support for custom metrics collection during function execution
+- [ ] Create a web dashboard for real-time performance monitoring
+- [ ] Add support for exporting performance data to Prometheus format
+- [ ] Develop integration with popular APM services (e.g., New Relic, Datadog)
+- [ ] Create adapters for popular frameworks (Express, Fastify, Next.js)
+
+### Improvements
+- [ ] Further optimize the performance overhead of tracking in production mode
+- [ ] Enhance memory tracking precision with detailed heap snapshots
+- [ ] Improve accuracy of CPU usage tracking
+- [ ] Add support for tracking I/O operations separately
+- [ ] Improve browser performance monitoring capabilities
+- [ ] Add more granular control over tracking modes
+
+### Documentation
+- [ ] Create comprehensive API documentation
+- [ ] Add more examples for different use cases
+- [ ] Create performance optimization guides based on TracePerf data
+- [ ] Add tutorials for integration with CI/CD pipelines
+
+## Long-term Roadmap
+
+### Features
+- [ ] Distributed tracing support for microservices
+- [ ] AI-powered performance optimization suggestions
+- [ ] Historical performance data visualization
+- [ ] Anomaly detection for unexpected performance changes
+- [ ] Containerized monitoring agent
+- [ ] Extended plugin system for custom integrations
+
+### Infrastructure
+- [ ] Cloud service for team-based performance monitoring
+- [ ] Self-hosted monitoring dashboard
+- [ ] Integration with container orchestration platforms
+- [ ] Support for serverless environments 

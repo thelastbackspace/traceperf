@@ -1,7 +1,7 @@
 {
   "name": "traceperf",
-  "version": "0.1.6",
-  "description": "Advanced console logging & performance tracking for Node.js",
+  "version": "0.2.0",
+  "description": "High-performance function execution tracking and monitoring for Node.js",
   "main": "dist/index.js",
   "module": "dist/esm/index.js",
   "types": "dist/index.d.ts",
@@ -34,14 +34,17 @@
     "dev": "tsc --watch"
   },
   "keywords": [
-    "logging",
     "performance",
-    "debugging",
-    "console",
-    "trace",
     "profiling",
-    "bottleneck",
-    "execution-flow"
+    "monitoring",
+    "tracking",
+    "execution",
+    "function-tracing",
+    "memory-tracking",
+    "bottleneck-detection",
+    "sampling",
+    "debug",
+    "optimization"
   ],
   "author": "Shubh Wadekar",
   "license": "MIT",

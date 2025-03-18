@@ -12,6 +12,9 @@ import { COLORS } from '../core/constants';
  * @returns The colorized string
  */
 export function colorize(text: string, color: string): string {
+  if (typeof supportsColor === 'function' ? !supportsColor() : false) {
+    return text;
+  }
   return `${color}${text}${COLORS.reset}`;
 }
 
@@ -22,6 +25,9 @@ export function colorize(text: string, color: string): string {
  * @returns The bold string
  */
 export function bold(text: string): string {
+  if (typeof supportsColor === 'function' ? !supportsColor() : false) {
+    return text;
+  }
   return `${COLORS.bright}${text}${COLORS.reset}`;
 }
 
@@ -32,6 +38,9 @@ export function bold(text: string): string {
  * @returns The dim string
  */
 export function dim(text: string): string {
+  if (typeof supportsColor === 'function' ? !supportsColor() : false) {
+    return text;
+  }
   return `${COLORS.dim}${text}${COLORS.reset}`;
 }
 
@@ -42,6 +51,9 @@ export function dim(text: string): string {
  * @returns The underlined string
  */
 export function underline(text: string): string {
+  if (typeof supportsColor === 'function' ? !supportsColor() : false) {
+    return text;
+  }
   return `${COLORS.underscore}${text}${COLORS.reset}`;
 }
 

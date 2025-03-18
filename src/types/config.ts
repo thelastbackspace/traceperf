@@ -62,9 +62,9 @@ export interface ITrackOptions {
   threshold?: number;
   
   /**
-   * Whether to include memory usage tracking
+   * Whether to track memory usage
    */
-  includeMemory?: boolean;
+  trackMemory?: boolean;
   
   /**
    * Whether to suppress logging for this tracking
@@ -80,6 +80,17 @@ export interface ITrackOptions {
    * @default true
    */
   enableNestedTracking?: boolean;
+
+  /**
+   * Tracking mode to use for this function
+   * Controls the level of detail and performance impact
+   */
+  trackingMode?: string;
+
+  /**
+   * Any other custom options
+   */
+  [key: string]: any;
 }
 
 /**
@@ -143,4 +154,10 @@ export interface ILoggerConfig {
    * @default [CliFormatter]
    */
   formatters?: IFormatter[];
+
+  /**
+   * Tracking mode to use for performance monitoring
+   * Controls the level of detail and performance impact
+   */
+  trackingMode?: string;
 } 

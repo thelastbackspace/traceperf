@@ -5,7 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - 2023-12-15
+## [0.2.0] - 2024-03-18
+
+### Added
+- New optimized performance monitoring implementation
+- `TrackingMode` enum for balancing performance with detail level
+- Memory usage tracking with detailed statistics
+- Configurable sampling rate for production environments
+- Custom threshold detection for identifying slow functions
+- Enhanced tracking of nested function calls
+- New `createTracePerf` factory function for creating customized instances
+- Improved browser compatibility
+
+### Changed
+- Completely refactored the internal architecture for better performance
+- Updated the API to focus on function execution tracking
+- Enhanced visualization of execution flows
+- Improved error handling and propagation
+- Better TypeScript type definitions
+- Optimized memory usage during tracking
+
+### Removed
+- Simplified logging API in favor of performance focused monitoring
+
+## [0.1.6] - 2025-03-18
 
 ### Fixed
 - Fixed memory tracking to never show negative values

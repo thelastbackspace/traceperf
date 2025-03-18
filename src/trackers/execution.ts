@@ -53,7 +53,7 @@ export class ExecutionTracker implements IExecutionTracker {
   public track<T>(fn: () => T, options?: ITrackOptions): T {
     const fnName = options?.label || getFunctionName(fn);
     const threshold = options?.threshold ?? this._defaultThreshold;
-    const includeMemory = options?.includeMemory ?? true;
+    const includeMemory = options?.trackMemory ?? true;
     const enableNestedTracking = options?.enableNestedTracking ?? true;
     
     // Get memory usage before execution

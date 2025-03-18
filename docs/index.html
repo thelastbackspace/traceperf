@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TracePerf - Advanced Console Logging & Performance Tracking</title>
+    <title>TracePerf - High-Performance Function Execution Tracking</title>
     <link rel="stylesheet" href="styles.css">
     <!-- Add Open Graph meta tags for better social sharing -->
     <meta property="og:title" content="TracePerf">
-    <meta property="og:description" content="Advanced console logging & performance tracking for Node.js applications.">
+    <meta property="og:description" content="High-performance function execution tracking and monitoring for Node.js applications.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://thelastbackspace.github.io/traceperf/">
+    <meta property="og:url" content="https://traceperf.com">
     <!-- Add favicon -->
     <link rel="icon" href="favicon.ico" type="image/x-icon">
 </head>
@@ -17,7 +17,7 @@
     <header>
         <div class="container">
             <h1>TracePerf</h1>
-            <p class="tagline">Advanced console logging & performance tracking for Node.js</p>
+            <p class="tagline">High-performance function execution tracking and monitoring for Node.js</p>
             <div class="buttons">
                 <a href="https://github.com/thelastbackspace/traceperf" class="button primary">GitHub</a>
                 <a href="#getting-started" class="button secondary">Get Started</a>
@@ -30,28 +30,36 @@
             <h2>Features</h2>
             <div class="feature-grid">
                 <div class="feature-card">
-                    <h3>📊 Execution Flow Tracing</h3>
-                    <p>Track function calls and visualize the execution flow with ASCII art.</p>
+                    <h3>⚡️ High-Performance Tracking</h3>
+                    <p>Track function execution time with minimal overhead, even in production environments.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>⏱️ Performance Monitoring</h3>
-                    <p>Identify slow functions and get suggestions for optimization.</p>
+                    <h3>🧠 Memory Usage Monitoring</h3>
+                    <p>Track memory consumption of functions and identify potential memory leaks.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🔀 Conditional Logging Modes</h3>
-                    <p>Different logging levels for development, staging, and production.</p>
+                    <h3>🔍 Flexible Tracking Modes</h3>
+                    <p>Choose between performance, balanced, and detailed tracking based on your needs.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>📚 Nested Logging</h3>
-                    <p>Group related logs with indentation for better readability.</p>
+                    <h3>📊 Execution Flow Visualization</h3>
+                    <p>Visualize execution flows with intelligent formatting to identify bottlenecks.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🧹 Auto-Remove Debug Logs</h3>
-                    <p>Automatically filter out debug logs in production.</p>
+                    <h3>📦 Nested Function Tracking</h3>
+                    <p>Track function calls within other functions to understand complex execution flows.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>📤 Multiple Output Formats</h3>
-                    <p>Support for CLI and JSON output formats.</p>
+                    <h3>⏱️ Configurable Thresholds</h3>
+                    <p>Focus on functions that exceed specific execution time thresholds.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🔄 Sampling Control</h3>
+                    <p>Adjust sampling rates to minimize performance impact in production.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>🌐 Browser Support</h3>
+                    <p>Use the same powerful tracking in browser environments.</p>
                 </div>
             </div>
         </section>
@@ -62,61 +70,123 @@
             <pre><code>npm install traceperf</code></pre>
 
             <h3>Basic Usage</h3>
-            <pre><code>const tracePerf = require('traceperf');
+            <pre><code>const { createTracePerf, TrackingMode } = require('traceperf');
 
-// Basic logging
-tracePerf.info('This is an info message');
-tracePerf.warn('This is a warning message');
-tracePerf.error('This is an error message');
-tracePerf.debug('This is a debug message');
+// Create a tracker with default settings
+const traceperf = createTracePerf();
 
-// Logging with objects
-tracePerf.info('User data:', { id: 1, name: 'John Doe' });
+// Track a synchronous function
+const result = traceperf.track(() => {
+  // Your function logic here
+  return 'result';
+}, { label: 'myFunction' });
 
-// Nested logging with groups
-tracePerf.group('User Authentication');
-tracePerf.info('Checking credentials');
-tracePerf.warn('Invalid password attempt');
-tracePerf.groupEnd();</code></pre>
+// Track an asynchronous function
+async function main() {
+  const result = await traceperf.track(async () => {
+    // Your async function logic here
+    return 'async result';
+  }, { label: 'asyncFunction' });
+}
+
+main();</code></pre>
         </section>
 
-        <section id="execution-flow">
-            <h2>Execution Flow Tracking</h2>
-            <pre><code>function fetchData() {
-  processData();
-}
+        <section id="tracking-modes">
+            <h2>Tracking Modes</h2>
+            <pre><code>const { createTracePerf, TrackingMode } = require('traceperf');
 
-function processData() {
-  calculateResults();
-}
+// Performance mode - minimal overhead for production
+const performanceTracker = createTracePerf({
+  trackingMode: TrackingMode.PERFORMANCE,
+  silent: true,
+  threshold: 100, // only track functions that take more than 100ms
+  sampleRate: 0.1 // only track 10% of function calls
+});
 
-function calculateResults() {
-  return 'done';
-}
+// Detailed mode - maximum information for development
+const devTracker = createTracePerf({
+  trackingMode: TrackingMode.DETAILED,
+  trackMemory: true,
+  enableNestedTracking: true
+});</code></pre>
+        </section>
 
-// Track the execution of the fetchData function
-const result = tracePerf.track(fetchData);</code></pre>
+        <section id="memory-tracking">
+            <h2>Memory Tracking</h2>
+            <pre><code>const { createTracePerf } = require('traceperf');
+
+// Enable memory tracking
+const tracker = createTracePerf({ trackMemory: true });
+
+// Track memory usage for a memory-intensive operation
+const result = tracker.track(() => {
+  // Memory intensive operations
+  const largeArray = new Array(1000000).fill(Math.random());
+  return processArray(largeArray);
+}, { label: 'memoryIntensiveOperation' });</code></pre>
 
             <h3>Output:</h3>
-            <pre class="output"><code>Execution Flow:
-┌──────────────────────────────┐
-│         fetchData            │  ⏱  200ms
-└──────────────────────────────┘
-                │  
-                ▼  
-┌──────────────────────────────┐
-│        processData           │  ⏱  500ms ⚠️ SLOW
-└──────────────────────────────┘
-                │  
-                ▼  
-┌──────────────────────────────┐
-│      calculateResults        │  ⏱  300ms
-└──────────────────────────────┘</code></pre>
+            <pre class="output"><code>└─ memoryIntensiveOperation: 25.22ms 📊 11.29MB</code></pre>
+        </section>
+
+        <section id="nested-tracking">
+            <h2>Nested Function Tracking</h2>
+            <pre><code>const { createTracePerf } = require('traceperf');
+const traceperf = createTracePerf({ enableNestedTracking: true });
+
+// Define some functions
+function processData(data) {
+  return transformData(data);
+}
+
+function transformData(data) {
+  return data.map(x => x * 2);
+}
+
+// Create trackable versions
+const trackedProcessData = traceperf.createTrackable(processData, { 
+  label: 'processData' 
+});
+
+const trackedTransformData = traceperf.createTrackable(transformData, { 
+  label: 'transformData' 
+});
+
+// Execute with tracking
+traceperf.track(() => {
+  const data = [1, 2, 3, 4, 5];
+  return trackedProcessData(data);
+}, { label: 'mainOperation' });</code></pre>
+
+            <h3>Output:</h3>
+            <pre class="output"><code>└─ mainOperation: 0.58ms
+   └─ processData: 0.33ms
+      └─ transformData: 0.12ms</code></pre>
+        </section>
+
+        <section id="browser-support">
+            <h2>Browser Support</h2>
+            <pre><code>&lt;script src="dist/traceperf.browser.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  const { createTracePerf, TrackingMode } = TracePerf;
+  
+  const browserTracker = createTracePerf({
+    trackingMode: TrackingMode.BALANCED,
+    trackMemory: true
+  });
+  
+  // Track a DOM operation
+  browserTracker.track(() => {
+    document.getElementById('output').textContent = 'Updated';
+  }, { label: 'updateDOM' });
+&lt;/script&gt;</code></pre>
         </section>
 
         <section id="documentation">
             <h2>Documentation</h2>
-            <p>For complete documentation, please visit the <a href="https://github.com/thelastbackspace/traceperf">GitHub repository</a>.</p>
+            <p>For complete documentation and examples, please visit the <a href="https://github.com/thelastbackspace/traceperf">GitHub repository</a>.</p>
+            <p>View examples at <a href="https://github.com/thelastbackspace/traceperf/tree/main/examples">examples directory</a>.</p>
         </section>
     </main>
 

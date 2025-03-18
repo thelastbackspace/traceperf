@@ -1,20 +1,20 @@
 # TracePerf
 
-Advanced console logging & performance tracking for Node.js applications.
+Advanced performance tracking and execution monitoring for Node.js applications.
 
 [![npm version](https://img.shields.io/npm/v/traceperf.svg)](https://www.npmjs.com/package/traceperf)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
 
-- **Structured and Visually Appealing Logs**: A better alternative to `console.log()` with colors, icons, and formatting.
-- **Execution Flow Tracing**: Track function calls and visualize the execution flow with ASCII art.
-- **Nested Function Tracking**: Multiple approaches to track nested function calls with detailed visualization.
-- **Performance Bottleneck Detection**: Identify slow functions and get suggestions for optimization.
-- **Conditional Logging Modes**: Different logging levels for development, staging, and production.
-- **Nested Logging**: Group related logs with indentation for better readability.
-- **Auto-Remove Debug Logs**: Automatically filter out debug logs in production.
-- **Universal Module Compatibility**: Works with both CommonJS and ESM environments.
+- **High-Performance Execution Monitoring**: Track function execution time with minimal overhead
+- **Memory Usage Tracking**: Monitor memory consumption of your functions and identify memory leaks
+- **Flexible Tracking Modes**: Choose between performance, balanced, and detailed tracking based on your needs
+- **Execution Flow Visualization**: Visualize execution flows with intelligent formatting
+- **Nested Function Tracking**: Track function calls within other functions to understand complex flows
+- **Customizable Threshold Detection**: Focus on functions that exceed specific execution time thresholds
+- **Sampling Control**: Adjust sampling rates to minimize performance impact in production
+- **Universal Module Compatibility**: Works with both CommonJS and ESM environments
 
 ## Installation
 
@@ -22,338 +22,300 @@ Advanced console logging & performance tracking for Node.js applications.
 npm install traceperf
 ```
 
-## Basic Usage
-
-### CommonJS (Node.js)
+## Quick Start
 
 ```javascript
-const tracePerf = require('traceperf');
+const traceperf = require('traceperf');
 
-// Basic logging
-tracePerf.info('This is an info message');
-tracePerf.warn('This is a warning message');
-tracePerf.error('This is an error message');
-tracePerf.debug('This is a debug message');
+// Track a synchronous function
+const result = traceperf.track(() => {
+  // Your code here
+  return 'result';
+}, { label: 'myFunction' });
 
-// Logging with objects
-tracePerf.info('User data:', { id: 1, name: 'John Doe' });
-
-// Nested logging with groups
-tracePerf.group('User Authentication');
-tracePerf.info('Checking credentials');
-tracePerf.warn('Invalid password attempt');
-tracePerf.groupEnd();
-```
-
-### ESM (ECMAScript Modules)
-
-```javascript
-import tracePerf from 'traceperf';
-
-// Use the same API as with CommonJS
-tracePerf.info('This is an info message');
-```
-
-
-
-## Conditional Logging Modes
-
-```javascript
-// Development mode (default)
-tracePerf.setMode('dev');
-tracePerf.debug('Debug message'); // Shown
-tracePerf.info('Info message');   // Shown
-tracePerf.warn('Warning message'); // Shown
-tracePerf.error('Error message'); // Shown
-
-// Staging mode
-tracePerf.setMode('staging');
-tracePerf.debug('Debug message'); // Not shown
-tracePerf.info('Info message');   // Not shown
-tracePerf.warn('Warning message'); // Shown
-tracePerf.error('Error message'); // Shown
-
-// Production mode
-tracePerf.setMode('prod');
-tracePerf.debug('Debug message'); // Not shown
-tracePerf.info('Info message');   // Not shown
-tracePerf.warn('Warning message'); // Not shown
-tracePerf.error('Error message'); // Shown
-```
-
-## Browser Usage (React, Next.js, etc.)
-
-TracePerf also provides a browser-compatible version for use in frontend applications:
-
-### ESM (Modern Browsers)
-
-```javascript
-// Import the browser version
-import tracePerf from 'traceperf/browser';
-
-// Use it just like the Node.js version
-tracePerf.info('This works in the browser!');
-```
-
-### CommonJS (Bundlers with CommonJS support)
-
-```javascript
-// Import the browser version with require
-const tracePerf = require('traceperf/browser');
-
-// Use it just like the Node.js version
-tracePerf.info('This works in the browser with CommonJS bundlers!');
-```
-
-### Browser Example
-
-```javascript
-// Import using your preferred method
-import tracePerf from 'traceperf/browser';
-
-// Track function performance
-function expensiveCalculation() {
-  // ...complex logic
-  return result;
-}
-
-const result = tracePerf.track(expensiveCalculation);
-```
-
-### React Component Example
-
-```jsx
-import React, { useEffect } from 'react';
-import tracePerf from 'traceperf/browser';
-
-function DataComponent() {
-  useEffect(() => {
-    tracePerf.group('Component Lifecycle');
-    tracePerf.info('Component mounted');
-    
-    // Fetch data with performance tracking
-    tracePerf.track(async () => {
-      const data = await fetchData();
-      // Process data...
-    }, { label: 'fetchAndProcessData', threshold: 300 });
-    
-    return () => {
-      tracePerf.info('Component unmounting');
-      tracePerf.groupEnd();
-    };
-  }, []);
-  
-  // Component rendering...
+// Track an asynchronous function
+async function main() {
+  const result = await traceperf.track(async () => {
+    // Your async code here
+    return 'async result';
+  }, { label: 'asyncFunction' });
 }
 ```
 
-## Advanced Usage
+## Tracking Modes
 
-### Tracking Nested Function Calls
-
-TracePerf provides two reliable approaches for tracking nested function calls, allowing you to visualize the complete execution flow of your application:
-
-1. **Using the `createTrackable` method** (recommended)
-2. **Using nested `track` calls**
-
-#### Using createTrackable (Recommended)
-
-The `createTrackable` method creates tracked versions of your functions that can be used in place of the original functions. This approach requires explicitly replacing function references but provides the most reliable nested tracking:
+TracePerf provides different tracking modes to balance performance with detail:
 
 ```javascript
-// Original functions
-function fetchData() {
-  processData();
-  calculateResults();
-}
+const { TrackingMode, createTracePerf } = require('traceperf');
 
-function processData() {
-  // Some processing logic
-}
+// Create a custom instance with performance-focused tracking
+const performanceTracker = createTracePerf({
+  trackingMode: TrackingMode.PERFORMANCE,
+  silent: true,
+  threshold: 100, // only track functions that take more than 100ms
+  sampleRate: 0.1 // only track 10% of function calls
+});
 
-function calculateResults() {
-  // Some calculation logic
-}
-
-// Create tracked versions of all functions
-const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchData' });
-const trackedProcessData = tracePerf.createTrackable(processData, { label: 'processData' });
-const trackedCalculateResults = tracePerf.createTrackable(calculateResults, { label: 'calculateResults' });
-
-// Replace the original function references to enable tracking
-// This step is crucial for tracking nested calls
-global.processData = trackedProcessData;
-global.calculateResults = trackedCalculateResults;
-
-// Execute the tracked top-level function
-trackedFetchData();
-```
-
-This will produce a complete execution flow chart showing all nested function calls:
-
-```
-Execution Flow:
-┌──────────────────────────────┐
-│         fetchData          │  ⏱  200ms
-└──────────────────────────────┘
-                │  
-                ▼  
-┌──────────────────────────────┐
-│        processData         │  ⏱  500ms ⚠️ SLOW
-└──────────────────────────────┘
-                │  
-                ▼  
-┌──────────────────────────────┐
-│      calculateResults      │  ⏱  300ms
-└──────────────────────────────┘
-```
-
-#### Using Nested Track Calls
-
-For more complex scenarios or when you don't want to replace function references, you can explicitly use nested `track` calls:
-
-```javascript
-tracePerf.track(() => {
-  // Top-level function logic
-  
-  tracePerf.track(() => {
-    // Nested function logic
-    
-    tracePerf.track(() => {
-      // Deeply nested function logic
-    }, { label: 'deeplyNestedFunction' });
-    
-  }, { label: 'nestedFunction' });
-  
-}, { label: 'topLevelFunction' });
-```
-
-This method requires more manual instrumentation but gives you precise control over what gets tracked.
-
-#### Controlling Nested Tracking
-
-You can control nested tracking behavior with the following option:
-
-```javascript
-// Disable nested tracking entirely for a specific function call
-tracePerf.track(fetchData, { enableNestedTracking: false });
-```
-
-For more examples, see the `examples/nested-function-example.js` and `examples/test/nested-function-test.js` files in the repository.
-
-## API Reference for Nested Tracking
-
-### createTrackable
-
-```javascript
-tracePerf.createTrackable(fn, options)
-```
-
-Creates a tracked version of a function that can be used for nested function tracking.
-
-- `fn`: The function to make trackable
-- `options`: Options for tracking
-  - `label`: Custom label for the function (defaults to function name)
-  - `threshold`: Performance threshold in milliseconds
-  - `includeMemory`: Whether to include memory usage tracking
-  - `enableNestedTracking`: Whether to enable nested tracking (default: true)
-
-Returns a new function that, when called, will track the execution of the original function.
-
-### Track Options for Nested Tracking
-
-When using the `track` method, you can control nested tracking with these options:
-
-```javascript
-tracePerf.track(fn, {
-  // ... other options
-  enableNestedTracking: true, // Enable/disable nested tracking
+// Create a custom instance with detailed tracking for development
+const devTracker = createTracePerf({
+  trackingMode: TrackingMode.DETAILED,
+  trackMemory: true,
+  enableNestedTracking: true
 });
 ```
 
-## Creating a Custom Logger
+## Tracking Individual Functions
 
 ```javascript
-const { createLogger } = require('traceperf');
-
-// Create a custom logger instance
-const logger = createLogger({
-  mode: 'dev',
-  level: 'debug',
-  colorize: true,
-  timestamp: true,
-  performanceThreshold: 100, // ms
-  indentSize: 2,
+// Track a single function execution
+const result = traceperf.track(() => {
+  // Function body
+  return someValue;
+}, {
+  label: 'functionName',
+  threshold: 50, // ms
+  trackMemory: true
 });
 
-// Use the custom logger
-logger.info('Custom logger');
+// Create a trackable version of an existing function
+const myFunction = (a, b) => a + b;
+const trackedFunction = traceperf.createTrackable(myFunction, { 
+  label: 'addition' 
+});
+
+// Now use it normally
+const sum = trackedFunction(5, 3); // will be tracked
 ```
 
-## API Reference
-
-### Logging Methods
-
-- `info(message, ...args)`: Log an informational message
-- `warn(message, ...args)`: Log a warning message
-- `error(message, ...args)`: Log an error message
-- `debug(message, ...args)`: Log a debug message (filtered in production)
-
-### Grouping
-
-- `group(label)`: Start a new log group with the given label
-- `groupEnd()`: End the current log group
-
-### Execution Tracking
-
-- `track(fn, options)`: Track the execution of a function and log performance metrics
-  - `options.label`: Custom label for the tracked function
-  - `options.threshold`: Performance threshold in milliseconds
-  - `options.includeMemory`: Whether to include memory usage tracking
-  - `options.silent`: Whether to suppress logging for this tracking
-
-### Configuration
-
-- `setMode(mode)`: Set the operational mode ('dev', 'staging', 'prod')
-- `getMode()`: Get the current operational mode
-
-## Memory Tracking
-
-TracePerf includes built-in memory tracking to help you analyze memory usage patterns in your application:
+## Tracking Methods in a Module
 
 ```javascript
-// Track memory usage for a function
-const result = tracePerf.track(() => {
-  // Memory intensive operations...
-  const largeArray = new Array(1000000).fill(0);
-  return processData(largeArray);
+const userService = {
+  getUser: async (id) => { /* implementation */ },
+  updateUser: async (id, data) => { /* implementation */ },
+  deleteUser: async (id) => { /* implementation */ }
+};
+
+// Register all methods for tracking
+const trackedUserService = traceperf.registerModule(userService);
+
+// Now all method calls will be tracked
+const user = await trackedUserService.getUser(123);
+```
+
+## Advanced Configuration
+
+```javascript
+const { createTracePerf, TrackingMode } = require('traceperf');
+
+const customTracker = createTracePerf({
+  // Tracking mode affects detail level and performance impact
+  trackingMode: TrackingMode.BALANCED,
+  
+  // Enable or disable performance statistics in console
+  silent: false,
+  
+  // Track memory usage (slight performance impact)
+  trackMemory: true,
+  
+  // Enable tracking of nested function calls
+  enableNestedTracking: true,
+  
+  // Minimum execution time to track (milliseconds)
+  threshold: 50,
+  
+  // Percentage of function calls to track (0.0 to 1.0)
+  sampleRate: 1.0
 });
 ```
 
-TracePerf will display memory usage in a human-readable format:
+## Browser Support
 
-```
-┌──────────────────────────────┐
-│        processData         │  ⏱  25.22ms 📊 11.29MB
-└──────────────────────────────┘
-```
-
-### Memory Tracking Behavior
-
-- **Positive Memory Values**: Indicates memory allocated during function execution.
-- **Non-Negative Values**: TracePerf ensures memory usage is never reported as negative, as negative values typically indicate garbage collection rather than actual memory behavior of your code.
-- **Browser Compatibility**: Memory tracking works in Chrome-based browsers using the Performance API. In environments where memory tracking is not available, TracePerf will gracefully degrade.
-
-### Memory Tracking Options
+TracePerf includes a browser-compatible version:
 
 ```javascript
-// Disable memory tracking for a specific function
-tracePerf.track(() => {
-  // Function without memory tracking
-}, { includeMemory: false });
+import traceperf from 'traceperf/browser';
+
+// Use the same API as in Node.js
+traceperf.track(() => {
+  // Your code
+});
 ```
+
+## Examples
+
+TracePerf includes several example files to help you get started:
+
+- **`examples/optimized-tracking-example.js`**: Demonstrates various ways to use the optimized tracking implementation
+- **`examples/browser-example.js`**: Shows how to use TracePerf in browser environments
+
+### Tracking an Async Function
+
+```javascript
+const { createTracePerf } = require('traceperf');
+const traceperf = createTracePerf();
+
+async function fetchData(url) {
+  return traceperf.track(async () => {
+    const response = await fetch(url);
+    return response.json();
+  }, { 
+    label: 'fetchData',
+    trackMemory: true
+  });
+}
+```
+
+### Tracking Nested Functions
+
+```javascript
+const { createTracePerf } = require('traceperf');
+const traceperf = createTracePerf({ enableNestedTracking: true });
+
+async function processData() {
+  return await traceperf.track(async () => {
+    // This function call will be automatically tracked as a child
+    const data = await fetchData();
+    return transformData(data);
+  }, { 
+    label: 'processData'
+  });
+}
+
+async function fetchData() {
+  return await traceperf.track(async () => {
+    // Implementation
+  }, { label: 'fetchData' });
+}
+
+function transformData(data) {
+  return traceperf.track(() => {
+    // Implementation
+  }, { label: 'transformData' });
+}
+```
+
+### Optimizing for Production
+
+```javascript
+const { createTracePerf, TrackingMode } = require('traceperf');
+
+// Development environment
+const devTracker = createTracePerf({
+  trackingMode: TrackingMode.DETAILED,
+  silent: false,
+  trackMemory: true,
+  threshold: 0 // track everything
+});
+
+// Production environment
+const prodTracker = createTracePerf({
+  trackingMode: TrackingMode.PERFORMANCE,
+  silent: true, // don't log to console
+  trackMemory: false, // minimize overhead
+  threshold: 100, // only track slow functions
+  sampleRate: 0.01 // track only 1% of function calls
+});
+
+// Use based on environment
+const traceperf = process.env.NODE_ENV === 'production' ? prodTracker : devTracker;
+```
+
+## Browser Usage
+
+To use TracePerf in the browser:
+
+```html
+<script src="dist/traceperf.browser.js"></script>
+<script>
+  const { createTracePerf, TrackingMode } = TracePerf;
+  
+  const browserTracker = createTracePerf({
+    trackingMode: TrackingMode.BALANCED,
+    trackMemory: true
+  });
+  
+  // Now use it to track your functions
+  browserTracker.track(() => {
+    // DOM operations or other browser-side logic
+  }, { label: 'domOperation' });
+</script>
+```
+
+Or with ES modules:
+
+```javascript
+import { createTracePerf, TrackingMode } from 'traceperf/browser';
+
+const browserTracker = createTracePerf({
+  trackingMode: TrackingMode.BALANCED
+});
+
+// Track a DOM operation
+browserTracker.track(() => {
+  document.getElementById('output').textContent = 'Updated';
+}, { label: 'updateDOM' });
+```
+
+## Advanced Tracking Features
+
+### Tracking with Different Modes
+
+```javascript
+const { createTracePerf, TrackingMode } = require('traceperf');
+
+// Performance mode - minimal overhead
+const performanceTracker = createTracePerf({
+  trackingMode: TrackingMode.PERFORMANCE
+});
+
+// Balanced mode - moderate detail with reasonable overhead
+const balancedTracker = createTracePerf({
+  trackingMode: TrackingMode.BALANCED
+});
+
+// Detailed mode - maximum information
+const detailedTracker = createTracePerf({
+  trackingMode: TrackingMode.DETAILED
+});
+```
+
+### Using Thresholds to Filter Results
+
+```javascript
+const { createTracePerf } = require('traceperf');
+const tracker = createTracePerf();
+
+// Only log functions that take more than 50ms
+tracker.track(slowFunction, { threshold: 50 });
+
+// Different thresholds for different functions
+tracker.track(criticalFunction, { threshold: 10 }); // Low threshold for critical paths
+tracker.track(backgroundTask, { threshold: 200 }); // Higher threshold for background tasks
+```
+
+### Memory Tracking
+
+```javascript
+const { createTracePerf } = require('traceperf');
+const tracker = createTracePerf({ trackMemory: true });
+
+// Track memory usage for memory-intensive operations
+const result = tracker.track(() => {
+  // Memory-intensive operations
+  const largeArray = new Array(1000000).fill(Math.random());
+  return processArray(largeArray);
+}, { label: 'memoryIntensiveOperation' });
+```
+
+For more examples, see the example files in the `examples/` directory.
 
 ## License
 
 MIT 
+
+## Website
+
+Visit our website at [traceperf.com](https://traceperf.com) for more information, interactive examples, and detailed documentation. 
 

@@ -7,6 +7,14 @@
 
 import { ILoggerConfig, LogLevel, LogMode, LogMeta, ITrackOptions } from './types';
 
+// Define tracking mode constants to avoid circular dependencies
+export const TrackingMode = {
+  PERFORMANCE: 'performance',
+  BALANCED: 'balanced',
+  DETAILED: 'detailed',
+  DEBUG: 'debug'
+};
+
 /**
  * Browser-compatible performance monitoring
  */
@@ -173,11 +181,11 @@ class BrowserExecutionTracker {
     const fnName = options.label || fn.name || 'anonymous';
     const threshold = options.threshold ?? this._defaultThreshold;
     const enableNestedTracking = options.enableNestedTracking ?? true;
-    const includeMemory = options.includeMemory ?? true;
+    const trackMemory = options.trackMemory ?? true;
     
     // Get memory usage before execution
     let startMemory: { heapUsed: number; heapTotal: number; external: number; rss: number } | undefined;
-    if (includeMemory) {
+    if (trackMemory) {
       try {
         startMemory = this._performanceMonitor.getMemoryUsage();
       } catch (e) {
@@ -226,7 +234,7 @@ class BrowserExecutionTracker {
       execution.isSlow = execution.duration > threshold;
       
       // Calculate memory usage
-      if (includeMemory && startMemory !== undefined) {
+      if (trackMemory && startMemory !== undefined) {
         try {
           const memoryDiff = this._performanceMonitor.getMemoryDiff(startMemory);
           execution.memoryUsage = memoryDiff;
@@ -252,7 +260,7 @@ class BrowserExecutionTracker {
     execution.isSlow = execution.duration > threshold;
     
     // Calculate memory usage
-    if (includeMemory && startMemory !== undefined) {
+    if (trackMemory && startMemory !== undefined) {
       try {
         const memoryDiff = this._performanceMonitor.getMemoryDiff(startMemory);
         execution.memoryUsage = memoryDiff;
@@ -291,12 +299,14 @@ class BrowserExecutionTracker {
   ): (...args: Parameters<T>) => ReturnType<T> {
     const self = this;
     const fnName = options?.label || fn.name || 'anonymous';
+    const trackingMode = options?.trackingMode || TrackingMode.BALANCED;
     
     // Create the tracked version of the function
     const trackedFn = function(this: any, ...args: Parameters<T>): ReturnType<T> {
       return self.track(() => fn.apply(this, args), { 
         ...options,
-        label: fnName
+        label: fnName,
+        trackingMode
       }) as ReturnType<T>;
     };
     
@@ -431,9 +441,11 @@ class BrowserLogger {
   private _indentLevel: number = 0;
   private _executionTracker: BrowserExecutionTracker;
   private _performanceMonitor: BrowserPerformanceMonitor;
+  private _trackingMode: string = TrackingMode.BALANCED;
 
   constructor(config: Partial<ILoggerConfig> = {}) {
     this._mode = config.mode || 'dev';
+    this._trackingMode = config.trackingMode || TrackingMode.BALANCED;
     this._executionTracker = new BrowserExecutionTracker({
       defaultThreshold: config.performanceThreshold || 100,
     });
@@ -489,14 +501,34 @@ class BrowserLogger {
     return this._mode;
   }
 
+  /**
+   * Set the tracking mode
+   * @param mode Tracking mode from TrackingMode enum
+   * @returns This instance for chaining
+   */
+  public setTrackingMode(mode: string): BrowserLogger {
+    this._trackingMode = mode;
+    return this;
+  }
+
+  /**
+   * Get the current tracking mode
+   * @returns Current tracking mode
+   */
+  public getTrackingMode(): string {
+    return this._trackingMode;
+  }
+
   public track<T>(fn: () => T, options?: ITrackOptions): T {
     const silent = options?.silent ?? false;
-    const includeMemory = options?.includeMemory ?? true;
+    const trackMemory = options?.trackMemory ?? true;
+    const trackingMode = options?.trackingMode || this._trackingMode;
     
     // Track the function execution
     const result = this._executionTracker.track(fn, {
       ...options,
-      includeMemory
+      trackMemory,
+      trackingMode
     });
     
     // Log the execution flow if not silent
@@ -522,7 +554,21 @@ class BrowserLogger {
     fn: T, 
     options?: Omit<ITrackOptions, 'label'> & { label?: string }
   ): (...args: Parameters<T>) => ReturnType<T> {
-    return this._executionTracker.createTrackable(fn, options);
+    const label = options?.label || fn.name || 'anonymous';
+    const threshold = options?.threshold ?? 100; // Use a sensible default of 100ms
+    const enableNestedTracking = options?.enableNestedTracking ?? true;
+    const trackMemory = options?.trackMemory ?? true;
+    const trackingMode = options?.trackingMode || this._trackingMode;
+    
+    // Create a new trackable function
+    return this._executionTracker.createTrackable(fn, {
+      ...options,
+      label,
+      threshold,
+      enableNestedTracking,
+      trackMemory,
+      trackingMode
+    });
   }
 
   private log(level: LogLevel, message: string | object, args: any[]): void {
@@ -571,31 +617,46 @@ class BrowserLogger {
 }
 
 /**
- * Create a new browser logger instance
- * 
- * @param config - Configuration options
- * @returns A new BrowserLogger instance
+ * Create a browser-compatible logger instance
+ * @param config Configuration options
+ * @returns Browser logger instance
  */
 export function createBrowserLogger(config: Partial<ILoggerConfig> = {}): BrowserLogger {
   return new BrowserLogger(config);
 }
 
-// Create a singleton instance
-const defaultBrowserLogger = new BrowserLogger();
+/**
+ * Create a browser-compatible TracePerf instance
+ * Alias of createBrowserLogger for API consistency with Node.js version
+ * @param config Configuration options
+ * @returns Browser logger instance
+ */
+export function createTracePerf(config: Partial<ILoggerConfig> = {}): BrowserLogger {
+  return createBrowserLogger(config);
+}
 
-// Export the singleton instance as the default export
-export default defaultBrowserLogger;
+// Create default browser logger instance
+const browserLogger = createBrowserLogger();
+
+// Export the default instance
+export default browserLogger;
 
 // Export classes for advanced usage
-export { BrowserLogger, BrowserPerformanceMonitor, BrowserExecutionTracker };
+export {
+  BrowserLogger,
+  BrowserPerformanceMonitor,
+  BrowserExecutionTracker
+};
 
 // Add CommonJS compatibility
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = Object.assign(defaultBrowserLogger, {
-    default: defaultBrowserLogger,
+  module.exports = Object.assign(browserLogger, {
+    default: browserLogger,
     createBrowserLogger,
+    createTracePerf,
     BrowserLogger,
     BrowserPerformanceMonitor,
-    BrowserExecutionTracker
+    BrowserExecutionTracker,
+    TrackingMode
   });
 } 

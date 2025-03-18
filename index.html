@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TracePerf Demo</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    h1 {
+      color: #0066cc;
+    }
+    .card {
+      background-color: #f5f7f9;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    button {
+      background-color: #0066cc;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+    button:hover {
+      background-color: #0055aa;
+    }
+    .output {
+      font-family: monospace;
+      background-color: #1e1e1e;
+      color: #f0f0f0;
+      padding: 10px;
+      border-radius: 4px;
+      margin-top: 10px;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .note {
+      background-color: #fffde7;
+      border-left: 4px solid #ffd600;
+      padding: 12px;
+      margin: 20px 0;
+    }
+    code {
+      background-color: #f0f0f0;
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TracePerf Demo</h1>
+    <p>High-performance function execution tracking for Node.js and browsers</p>
+  </header>
+
+  <div class="note">
+    <strong>Note:</strong> Open your browser console (F12 or Cmd+Option+I) to see the performance tracking output.
+  </div>
+
+  <div class="card">
+    <h2>Performance Monitoring</h2>
+    <p>Click the buttons below to run different performance tests:</p>
+    
+    <button id="syncBtn">Run Synchronous Task</button>
+    <button id="asyncBtn">Run Async Task</button>
+    <button id="complexBtn">Run Complex Operation</button>
+    
+    <div class="output" id="outputDisplay">Results will appear here...</div>
+  </div>
+
+  <div class="card">
+    <h2>Usage Example</h2>
+    <p>Include the TracePerf library in your project:</p>
+    <div class="output">
+&lt;script src="dist/traceperf.browser.js"&gt;&lt;/script&gt;
+
+&lt;script&gt;
+  const { createTracePerf, TrackingMode } = TracePerf;
+  
+  const tracker = createTracePerf({
+    trackingMode: TrackingMode.BALANCED,
+    trackMemory: true
+  });
+  
+  // Track function performance
+  tracker.track(() => {
+    // Your code here
+  }, { label: 'myFunction' });
+&lt;/script&gt;</div>
+  </div>
+
+  <script src="dist/browser.js"></script>
+  <script>
+    // Initialize TracePerf
+    const { createTracePerf, TrackingMode } = TracePerf;
+    
+    const traceperf = createTracePerf({
+      trackingMode: TrackingMode.BALANCED,
+      trackMemory: true,
+      threshold: 0, // Track everything for demo purposes
+      silent: false
+    });
+    
+    // Output element
+    const output = document.getElementById('outputDisplay');
+    
+    // Synchronous operation
+    document.getElementById('syncBtn').addEventListener('click', function() {
+      output.textContent = 'Running synchronous task...';
+      
+      const result = traceperf.track(() => {
+        // Simulate CPU-intensive work
+        let sum = 0;
+        for (let i = 0; i < 1000000; i++) {
+          sum += Math.sqrt(i);
+        }
+        return `Calculated sum of square roots: ${sum.toFixed(2)}`;
+      }, { label: 'synchronousCalculation' });
+      
+      output.textContent = result;
+    });
+    
+    // Asynchronous operation
+    document.getElementById('asyncBtn').addEventListener('click', async function() {
+      output.textContent = 'Running asynchronous task...';
+      
+      const result = await traceperf.track(async () => {
+        // Simulate API call
+        const data = await new Promise(resolve => {
+          setTimeout(() => {
+            resolve({
+              timestamp: new Date().toISOString(),
+              results: [1, 2, 3, 4, 5].map(n => n * n)
+            });
+          }, 1000);
+        });
+        
+        return `Data received at ${data.timestamp}:\n${JSON.stringify(data.results, null, 2)}`;
+      }, { label: 'apiRequest' });
+      
+      output.textContent = result;
+    });
+    
+    // Complex nested operation
+    document.getElementById('complexBtn').addEventListener('click', function() {
+      output.textContent = 'Running complex operation...';
+      
+      // Define functions
+      function processData(data) {
+        // Simulate processing
+        const start = performance.now();
+        while (performance.now() - start < 200) {}
+        return data.map(x => x * 2);
+      }
+      
+      function calculateStatistics(data) {
+        // Simulate calculations
+        const start = performance.now();
+        while (performance.now() - start < 100) {}
+        
+        const sum = data.reduce((a, b) => a + b, 0);
+        const avg = sum / data.length;
+        return { sum, avg };
+      }
+      
+      // Create trackable versions
+      const trackedProcessData = traceperf.createTrackable(processData, { 
+        label: 'processData' 
+      });
+      
+      const trackedCalculateStatistics = traceperf.createTrackable(calculateStatistics, { 
+        label: 'calculateStatistics' 
+      });
+      
+      // Run the operation
+      const result = traceperf.track(() => {
+        const rawData = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        const processed = trackedProcessData(rawData);
+        const stats = trackedCalculateStatistics(processed);
+        
+        return `Processed data: ${processed.join(', ')}\nSum: ${stats.sum}, Average: ${stats.avg.toFixed(2)}`;
+      }, { 
+        label: 'complexOperation',
+        enableNestedTracking: true
+      });
+      
+      output.textContent = result;
+    });
+    
+    // Expose traceperf globally for console experimentation
+    window.traceperf = traceperf;
+    console.log('TracePerf is available in the console as "traceperf"');
+  </script>
+</body>
+</html> 
