@@ -271,22 +271,6 @@ tracePerf.track(fn, {
 });
 ```
 
-## Understanding Memory Metrics
-
-TracePerf tracks memory usage for each function execution. Here's how to interpret the memory metrics:
-
-- **Memory Delta**: The memory values shown represent the change in heap memory during the function execution, not the total memory used.
-- **Positive Values (+)**: Indicate memory was allocated during the function execution that wasn't garbage collected.
-- **Negative Values (-)**: Indicate memory was freed during the function execution, often due to garbage collection.
-- **Zero Values (0)**: Small memory changes are reported as zero to reduce noise.
-
-Memory tracking can help identify:
-- Functions that cause significant memory leaks (consistent high positive values)
-- Functions that trigger garbage collection (occasional large negative values)
-- Functions with excessive temporary object creation (large positive values followed by large negative values)
-
-Note that memory tracking isn't 100% accurate due to JavaScript's garbage collection, which can occur at unpredictable times. For the most reliable results, try running memory-intensive functions multiple times.
-
 ## Creating a Custom Logger
 
 ```javascript
@@ -332,6 +316,42 @@ logger.info('Custom logger');
 
 - `setMode(mode)`: Set the operational mode ('dev', 'staging', 'prod')
 - `getMode()`: Get the current operational mode
+
+## Memory Tracking
+
+TracePerf includes built-in memory tracking to help you analyze memory usage patterns in your application:
+
+```javascript
+// Track memory usage for a function
+const result = tracePerf.track(() => {
+  // Memory intensive operations...
+  const largeArray = new Array(1000000).fill(0);
+  return processData(largeArray);
+});
+```
+
+TracePerf will display memory usage in a human-readable format:
+
+```
+┌──────────────────────────────┐
+│        processData         │  ⏱  25.22ms 📊 11.29MB
+└──────────────────────────────┘
+```
+
+### Memory Tracking Behavior
+
+- **Positive Memory Values**: Indicates memory allocated during function execution.
+- **Non-Negative Values**: TracePerf ensures memory usage is never reported as negative, as negative values typically indicate garbage collection rather than actual memory behavior of your code.
+- **Browser Compatibility**: Memory tracking works in Chrome-based browsers using the Performance API. In environments where memory tracking is not available, TracePerf will gracefully degrade.
+
+### Memory Tracking Options
+
+```javascript
+// Disable memory tracking for a specific function
+tracePerf.track(() => {
+  // Function without memory tracking
+}, { includeMemory: false });
+```
 
 ## License
 

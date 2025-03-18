@@ -1,16 +1,16 @@
 /**
- * Memory Tracking Test
+ * Browser Memory Tracking Test
  * 
- * This test demonstrates the memory tracking issues and tests our fixes.
+ * This test demonstrates the memory tracking issues in the browser environment and tests our fixes.
  */
 
-// Import the default logger instance
-const tracePerf = require('../../dist');
+// Import the browser version of the library
+const tracePerf = require('../../dist/browser');
 
 // Initialize the tracer in development mode
 tracePerf.setMode('dev');
 
-// Helper function to perform a memory-intensive operation
+// Helper function to perform a memory-intensive operation in browsers
 function allocateMemory(sizeInMB) {
   console.log(`Allocating approximately ${sizeInMB}MB of memory...`);
   const bytesPerMB = 1024 * 1024;
@@ -36,9 +36,9 @@ function releaseMemory(arrays) {
   }
 }
 
-// Test 1: Basic memory tracking
+// Test 1: Basic memory tracking in browser
 function testBasicMemoryTracking() {
-  console.log('\n--- Test 1: Basic Memory Tracking ---\n');
+  console.log('\n--- Test 1: Basic Browser Memory Tracking ---\n');
   
   // Clear any previous execution records
   tracePerf.track(() => {}, { silent: true });
@@ -53,12 +53,12 @@ function testBasicMemoryTracking() {
     releaseMemory(memoryArrays);
   }, { label: 'releaseMemory' });
   
-  console.log('\nMemory tracking completed for Test 1.');
+  console.log('\nBrowser memory tracking completed for Test 1.');
 }
 
-// Test 2: Nested function memory tracking
+// Test 2: Nested function memory tracking in browser
 function testNestedMemoryTracking() {
-  console.log('\n--- Test 2: Nested Memory Tracking ---\n');
+  console.log('\n--- Test 2: Nested Browser Memory Tracking ---\n');
   
   // Clear any previous execution records
   tracePerf.track(() => {}, { silent: true });
@@ -92,39 +92,11 @@ function testNestedMemoryTracking() {
   global.allocateMemory = allocateMemory;
   global.releaseMemory = releaseMemory;
   
-  console.log('\nMemory tracking completed for Test 2.');
-}
-
-// Test 3: Force garbage collection (when available)
-function testGarbageCollectionTiming() {
-  console.log('\n--- Test 3: Garbage Collection Timing ---\n');
-  
-  // Clear any previous execution records
-  tracePerf.track(() => {}, { silent: true });
-  
-  // Track operation with explicit GC if available
-  tracePerf.track(() => {
-    console.log('Allocating memory...');
-    const arrays = allocateMemory(20);
-    
-    console.log('Releasing memory...');
-    releaseMemory(arrays);
-    
-    // Try to force garbage collection if available (Node.js with --expose-gc flag)
-    if (global.gc) {
-      console.log('Forcing garbage collection...');
-      global.gc();
-    } else {
-      console.log('Note: Run with node --expose-gc to enable forced garbage collection');
-    }
-  }, { label: 'memoryWithGC' });
-  
-  console.log('\nMemory tracking completed for Test 3.');
+  console.log('\nBrowser memory tracking completed for Test 2.');
 }
 
 // Run the tests
 testBasicMemoryTracking();
 testNestedMemoryTracking();
-testGarbageCollectionTiming();
 
-console.log('\nAll memory tracking tests completed.'); 
+console.log('\nAll browser memory tracking tests completed.'); 

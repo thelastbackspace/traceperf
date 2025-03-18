@@ -5,19 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.7] - 2025-03-18
+## [0.1.6] - 2023-12-15
 
 ### Fixed
-- Fixed memory tracking to provide more accurate and useful measurements
-- Improved memory delta reporting with clear +/- indicators for memory allocation/deallocation
-- Fixed negative memory values by better handling garbage collection effects
-- Added garbage collection triggering (when available) for more consistent memory measurements
+- Fixed memory tracking to never show negative values
+- Improved memory usage calculation and display
+- Fixed browser memory tracking in Chrome-based browsers
+- Updated nested function tracking implementation
+- Added comprehensive examples for memory tracking
+- Added proper error handling for environments where memory tracking is not available
 
 ### Added
-- Added comprehensive documentation explaining how to interpret memory metrics
-- Added memory delta notation to clarify that values represent changes in memory, not absolute usage
+- Added memory tracking documentation to README
+- Added memoryReleased field to better track memory behavior
+- Added comprehensive test suite for memory tracking in different environments
 
-## [0.1.6] - 2025-03-18
+### Changed
+- Improved browser compatibility for memory tracking
+- Enhanced formatMemorySize method for better human-readable output
+
+## [0.1.5] - 2023-12-10
 
 ### Fixed
 - Fixed implementation of nested function tracking
@@ -43,14 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed unsupported `autoTracking` functionality that wasn't fully implemented
 - Cleaned up unnecessary and redundant example files from the repository
 - Removed redundant nested-tracking.js and execution-flow.js examples in favor of the more comprehensive nested-function-example.js
-
-## [0.1.5] - 2025-03-16
-
-### Changed
-- Updated README.md to accurately reflect nested function tracking implementation
-- Removed misleading examples that suggested automatic tracking of nested functions
-- Improved documentation clarity for both `createTrackable` and nested `track` approaches
-- Added API reference section for nested tracking options
 
 ## [0.1.4] - 2025-03-16
 

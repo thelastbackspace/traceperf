@@ -124,4 +124,4 @@ simple-decorator-example.js
 simple-example.js
 proxy-tracking-example.js
 wrapper-tracking-example.js
-.cursor/
+.cursor/rules/*

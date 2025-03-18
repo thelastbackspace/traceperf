@@ -1,43 +1,40 @@
 import { IExecutionTracker, ITrackOptions } from '../types';
-import { CallStackManager, getFunctionName } from '../utils/stack';
-import { getHighResTime, getDuration } from '../utils/timing';
-import { ExecutionData, AsciiArtGenerator } from '../formatters/ascii';
+import { getFunctionName } from '../utils/stack';
+import { getHighResTime, getDuration, formatDuration } from '../utils/timing';
 
 /**
- * Execution record for a function call
+ * A record of a function execution
  */
-interface ExecutionRecord {
+export interface ExecutionRecord {
   name: string;
   duration: number;
-  isSlow: boolean;
-  memoryUsage?: number;
-  level: number;
   startTime: [number, number];
   endTime?: [number, number];
+  isSlow: boolean;
+  level: number;
+  memoryUsage?: number;
+  memoryReleased?: number;
   children: ExecutionRecord[];
   parent?: ExecutionRecord;
 }
 
 /**
- * Execution tracker for tracking function calls and generating flow charts
+ * Execution tracker for performance monitoring
  */
 export class ExecutionTracker implements IExecutionTracker {
-  private _callStack: CallStackManager;
   private _executions: ExecutionRecord[] = [];
   private _currentExecution: ExecutionRecord | null = null;
-  private _asciiGenerator: AsciiArtGenerator;
   private _defaultThreshold: number;
+  private _callStack: string[] = [];
   private _globalScope: Record<string, any>;
   private _trackedFunctions: Map<Function, Function> = new Map();
-
+  
   /**
-   * Create a new ExecutionTracker instance
+   * Constructor
    * 
-   * @param options - Tracker options
+   * @param options - Options for execution tracking
    */
-  constructor(options: { defaultThreshold?: number; boxWidth?: number } = {}) {
-    this._callStack = new CallStackManager();
-    this._asciiGenerator = new AsciiArtGenerator({ boxWidth: options.boxWidth });
+  constructor(options: { defaultThreshold?: number } = {}) {
     this._defaultThreshold = options.defaultThreshold ?? 100; // ms
     
     // Get a reference to the global scope (works in both Node.js and browsers)
@@ -59,17 +56,15 @@ export class ExecutionTracker implements IExecutionTracker {
     const includeMemory = options?.includeMemory ?? true;
     const enableNestedTracking = options?.enableNestedTracking ?? true;
     
-    // Ensure garbage collection if available before measuring memory
-    if (includeMemory && global.gc && typeof global.gc === 'function') {
+    // Get memory usage before execution
+    let startMemory: { heapUsed: number; heapTotal: number; external: number; rss: number } | undefined;
+    if (includeMemory) {
       try {
-        global.gc();
+        startMemory = process.memoryUsage();
       } catch (e) {
-        // Ignore if gc is not available
+        console.warn('Unable to track memory usage:', e);
       }
     }
-    
-    // Get memory usage before execution
-    const startMemory = includeMemory ? process.memoryUsage() : undefined;
     
     // Start timing
     const startTime = getHighResTime();
@@ -118,18 +113,18 @@ export class ExecutionTracker implements IExecutionTracker {
       
       // Calculate memory usage
       if (includeMemory && startMemory !== undefined) {
-        const endMemory = process.memoryUsage();
-        
-        // Calculate memory delta
-        const heapUsedDelta = endMemory.heapUsed - startMemory.heapUsed;
-        
-        // Only report positive memory change or significant negative change
-        // Small negative values might be due to garbage collection
-        if (heapUsedDelta > 0 || heapUsedDelta < -10000) {
-          execution.memoryUsage = heapUsedDelta;
-        } else {
-          // For very small negative changes, just report 0
-          execution.memoryUsage = 0;
+        try {
+          const endMemory = process.memoryUsage();
+          // Calculate the memory difference, ensuring it's never negative
+          const memoryDiff = endMemory.heapUsed - startMemory.heapUsed;
+          execution.memoryUsage = Math.max(0, memoryDiff); // Ensure non-negative value
+          
+          // If memory decreased, store a separate field for better visualization
+          if (memoryDiff < 0) {
+            execution.memoryReleased = Math.abs(memoryDiff);
+          }
+        } catch (e) {
+          console.warn('Error calculating memory usage:', e);
         }
       }
       
@@ -158,7 +153,7 @@ export class ExecutionTracker implements IExecutionTracker {
     const self = this;
     const fnName = options?.label || fn.name || 'anonymous';
     
-    // Create the tracked version of the function
+    // Create a tracked version of the function
     const trackedFn = function(this: any, ...args: Parameters<T>): ReturnType<T> {
       return self.track(() => fn.apply(this, args), { 
         ...options,
@@ -166,10 +161,37 @@ export class ExecutionTracker implements IExecutionTracker {
       }) as ReturnType<T>;
     };
     
-    // Store the original and tracked function for future reference
+    // Store the original and tracked function
     this._trackedFunctions.set(fn, trackedFn as unknown as Function);
     
     return trackedFn;
+  }
+
+  /**
+   * Get all execution records
+   * 
+   * @returns A list of execution records
+   */
+  public getExecutions(): ExecutionRecord[] {
+    return [...this._executions];
+  }
+
+  /**
+   * Generate a human-friendly memory size string
+   * 
+   * @param bytes - The size in bytes
+   * @returns A formatted string
+   */
+  public formatMemorySize(bytes: number): string {
+    if (bytes < 1024) {
+      return `${bytes.toFixed(2)}B`;
+    } else if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(2)}KB`;
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+    } else {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+    }
   }
 
   /**
@@ -178,7 +200,7 @@ export class ExecutionTracker implements IExecutionTracker {
    * @returns The current call stack
    */
   public getCallStack(): string[] {
-    return this._callStack.getStack();
+    return [...this._callStack];
   }
 
   /**
@@ -187,60 +209,60 @@ export class ExecutionTracker implements IExecutionTracker {
    * @returns ASCII flow chart of the execution
    */
   public generateFlowChart(): string {
-    // Convert execution records to execution data for the ASCII generator
-    const executionData = this.prepareExecutionData(this._executions);
+    let result = '';
     
-    // Generate the flow chart
-    return this._asciiGenerator.generateFlowChart(executionData);
-  }
-
-  /**
-   * Prepare execution data for the ASCII generator
-   * 
-   * @param executions - The execution records to prepare
-   * @returns A list of execution data
-   */
-  private prepareExecutionData(executions: ExecutionRecord[]): ExecutionData[] {
-    const result: ExecutionData[] = [];
-    
-    // Process each root execution
-    executions.forEach(execution => {
-      // Add the root execution
-      result.push({
-        name: execution.name,
-        duration: execution.duration,
-        isSlow: execution.isSlow,
-        memoryUsage: execution.memoryUsage,
-        level: execution.level,
-      });
-      
-      // Add children recursively
-      this.addChildrenToResult(execution.children, result);
+    // Process each execution
+    this._executions.forEach(execution => {
+      result = this.printExecutionTree(execution, result);
     });
     
     return result;
   }
 
   /**
-   * Add children to the result list
+   * Recursively print an execution tree
    * 
-   * @param children - The children to add
-   * @param result - The result list
+   * @param execution - The root execution
+   * @param result - The output string
+   * @returns The updated result string
    */
-  private addChildrenToResult(children: ExecutionRecord[], result: ExecutionData[]): void {
-    children.forEach(child => {
-      // Add the child
-      result.push({
-        name: child.name,
-        duration: child.duration,
-        isSlow: child.isSlow,
-        memoryUsage: child.memoryUsage,
-        level: child.level,
-      });
-      
-      // Add grandchildren recursively
-      this.addChildrenToResult(child.children, result);
+  private printExecutionTree(execution: ExecutionRecord, result: string): string {
+    // Print this execution
+    result = this.printSingleExecution(execution, result);
+    
+    // Print children recursively
+    execution.children.forEach(child => {
+      result = this.printExecutionTree(child, result);
     });
+    
+    return result;
+  }
+
+  /**
+   * Print a single execution with appropriate formatting
+   * 
+   * @param execution - The execution to print
+   * @param result - The result string to append to
+   * @returns The updated result string
+   */
+  private printSingleExecution(execution: ExecutionRecord, result: string): string {
+    const indent = '  '.repeat(execution.level);
+    const durationStr = execution.duration.toFixed(2);
+    const slowMarker = execution.isSlow ? ' [SLOW]' : '';
+    
+    let memoryStr = '';
+    if (execution.memoryUsage !== undefined) {
+      memoryStr = ` [${this.formatMemorySize(execution.memoryUsage)}]`;
+    }
+    
+    result += `${indent}→ ${execution.name} (${durationStr}ms)${slowMarker}${memoryStr}\n`;
+    
+    // Add connector if this execution has children
+    if (execution.children.length > 0) {
+      result += `${indent}  |\n`;
+    }
+    
+    return result;
   }
 
   /**
@@ -249,15 +271,6 @@ export class ExecutionTracker implements IExecutionTracker {
   public clear(): void {
     this._executions = [];
     this._currentExecution = null;
-    this._callStack.clear();
-  }
-
-  /**
-   * Get all execution records
-   * 
-   * @returns All execution records
-   */
-  public getExecutions(): ExecutionRecord[] {
-    return [...this._executions];
+    this._callStack = [];
   }
 } 

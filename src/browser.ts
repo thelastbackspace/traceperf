@@ -41,25 +41,63 @@ class BrowserPerformanceMonitor {
     return duration > effectiveThreshold;
   }
 
-  public getMemoryUsage(): { heapUsed: number; heapTotal: number; external: number; rss: number } {
-    // Use browser performance API if available
-    if (performance && 'memory' in performance) {
-      const memory = (performance as any).memory;
-      return {
-        heapUsed: memory?.usedJSHeapSize || 0,
-        heapTotal: memory?.totalJSHeapSize || 0,
-        external: 0, // Not available in browser
-        rss: 0, // Not available in browser
-      };
+  /**
+   * Get memory usage from browser performance API
+   * @returns Memory usage object with heap metrics or undefined if not available
+   */
+  public getMemoryUsage(): { heapUsed: number; heapTotal: number; external: number; rss: number } | undefined {
+    try {
+      // Chrome-specific memory API
+      if (performance && 'memory' in performance) {
+        const memory = (performance as any).memory;
+        return {
+          heapUsed: memory?.usedJSHeapSize || 0,
+          heapTotal: memory?.totalJSHeapSize || 0,
+          external: 0, // Not available in browser
+          rss: 0, // Not available in browser
+        };
+      }
+      
+      // Firefox has a different memory API
+      if (window && (window as any).performance && (window as any).performance.memory) {
+        const memory = (window as any).performance.memory;
+        return {
+          heapUsed: memory.usedJSHeapSize || 0,
+          heapTotal: memory.totalJSHeapSize || 0,
+          external: 0,
+          rss: 0,
+        };
+      }
+      
+      return undefined;
+    } catch (e) {
+      console.warn('Memory API not available or permission denied:', e);
+      return undefined;
     }
-    
-    // Fallback for browsers without memory API
-    return {
-      heapUsed: 0,
-      heapTotal: 0,
-      external: 0,
-      rss: 0,
-    };
+  }
+
+  /**
+   * Calculate memory difference
+   * @param start - Starting memory usage
+   * @returns Memory difference in bytes
+   */
+  public getMemoryDiff(start: { heapUsed: number }): number {
+    try {
+      const current = this.getMemoryUsage();
+      if (!current) return 0;
+      
+      const diff = current.heapUsed - start.heapUsed;
+      
+      // Return zero instead of negative values
+      return Math.max(0, diff);
+    } catch (e) {
+      console.warn('Error calculating memory difference:', e);
+      return 0;
+    }
+  }
+
+  public now(): number {
+    return performance.now();
   }
 
   public generateSuggestion(
@@ -89,6 +127,7 @@ class BrowserExecutionTracker {
   private _defaultThreshold: number;
   private _globalScope: Record<string, any>;
   private _trackedFunctions: Map<Function, Function> = new Map();
+  private _performanceMonitor: BrowserPerformanceMonitor;
 
   /**
    * Create a new BrowserExecutionTracker instance
@@ -97,6 +136,7 @@ class BrowserExecutionTracker {
    */
   constructor(options: { defaultThreshold?: number } = {}) {
     this._defaultThreshold = options.defaultThreshold ?? 100; // ms
+    this._performanceMonitor = new BrowserPerformanceMonitor(options);
     
     // Get a reference to the global scope (window in browsers)
     this._globalScope = typeof window !== 'undefined' ? window : 
@@ -133,14 +173,21 @@ class BrowserExecutionTracker {
     const fnName = options.label || fn.name || 'anonymous';
     const threshold = options.threshold ?? this._defaultThreshold;
     const enableNestedTracking = options.enableNestedTracking ?? true;
+    const includeMemory = options.includeMemory ?? true;
+    
+    // Get memory usage before execution
+    let startMemory: { heapUsed: number; heapTotal: number; external: number; rss: number } | undefined;
+    if (includeMemory) {
+      try {
+        startMemory = this._performanceMonitor.getMemoryUsage();
+      } catch (e) {
+        console.warn('Unable to track memory usage:', e);
+      }
+    }
     
     // Add to call stack
     this._callStack.push(fnName);
     
-    // Get memory usage before execution
-    const startMemory = performance && 'memory' in performance ? 
-      (performance as any).memory?.usedJSHeapSize : undefined;
-      
     // Create execution record
     const execution: any = {
       name: fnName,
@@ -156,7 +203,7 @@ class BrowserExecutionTracker {
       execution.parent = this._currentExecution;
       this._currentExecution.children.push(execution);
     } else {
-      // This is a root execution if no parent or if nested tracking is disabled
+      // This is a root execution
       this._executions.push(execution);
     }
     
@@ -166,31 +213,25 @@ class BrowserExecutionTracker {
     // Set this as the current execution
     this._currentExecution = execution;
     
+    let result: T;
+    
     try {
       // Execute the function
-      return fn();
-    } finally {
-      // End timing and calculate duration
+      result = fn();
+    } catch (error) {
+      // End timing
       const endTime = performance.now();
+      execution.endTime = endTime;
       execution.duration = endTime - execution.startTime;
-      
-      // Check if it's a bottleneck
       execution.isSlow = execution.duration > threshold;
       
-      // Calculate memory usage if available
-      if (startMemory !== undefined && performance && 'memory' in performance) {
-        const endMemory = (performance as any).memory?.usedJSHeapSize;
-        if (endMemory !== undefined) {
-          // Calculate memory delta
-          const heapUsedDelta = endMemory - startMemory;
-          
-          // Only report positive memory change or significant negative change
-          if (heapUsedDelta > 0 || heapUsedDelta < -10000) {
-            execution.memoryUsage = heapUsedDelta;
-          } else {
-            // For very small negative changes, just report 0
-            execution.memoryUsage = 0;
-          }
+      // Calculate memory usage
+      if (includeMemory && startMemory !== undefined) {
+        try {
+          const memoryDiff = this._performanceMonitor.getMemoryDiff(startMemory);
+          execution.memoryUsage = memoryDiff;
+        } catch (e) {
+          console.warn('Error calculating memory usage:', e);
         }
       }
       
@@ -199,7 +240,39 @@ class BrowserExecutionTracker {
       
       // Remove from call stack
       this._callStack.pop();
+      
+      // Re-throw the error
+      throw error;
     }
+    
+    // End timing
+    const endTime = performance.now();
+    execution.endTime = endTime;
+    execution.duration = endTime - execution.startTime;
+    execution.isSlow = execution.duration > threshold;
+    
+    // Calculate memory usage
+    if (includeMemory && startMemory !== undefined) {
+      try {
+        const memoryDiff = this._performanceMonitor.getMemoryDiff(startMemory);
+        execution.memoryUsage = memoryDiff;
+      } catch (e) {
+        console.warn('Error calculating memory usage:', e);
+      }
+    }
+    
+    // Generate suggestion if slow
+    if (execution.isSlow) {
+      execution.suggestion = this.generateSuggestion(fnName, execution.duration);
+    }
+    
+    // Restore the previous current execution
+    this._currentExecution = previousExecution;
+    
+    // Remove from call stack
+    this._callStack.pop();
+    
+    return result;
   }
 
   /**
@@ -256,7 +329,12 @@ class BrowserExecutionTracker {
       const durationStr = execution.duration.toFixed(2);
       const slowMarker = execution.isSlow ? ' [SLOW]' : '';
       
-      result += `${indent}→ ${execution.name} (${durationStr}ms)${slowMarker}\n`;
+      let memoryStr = '';
+      if (execution.memoryUsage !== undefined && execution.memoryUsage > 0) {
+        memoryStr = ` [${this.formatMemorySize(execution.memoryUsage)}]`;
+      }
+      
+      result += `${indent}→ ${execution.name} (${durationStr}ms)${slowMarker}${memoryStr}\n`;
       
       // Add suggestion if available
       if (execution.suggestion) {
@@ -285,6 +363,7 @@ class BrowserExecutionTracker {
         isSlow: execution.isSlow,
         suggestion: execution.suggestion,
         level: execution.level,
+        memoryUsage: execution.memoryUsage
       });
       
       // Add children recursively
@@ -309,11 +388,29 @@ class BrowserExecutionTracker {
         isSlow: child.isSlow,
         suggestion: child.suggestion,
         level: child.level,
+        memoryUsage: child.memoryUsage
       });
       
       // Add grandchildren recursively
       this.addChildrenToResult(child.children, result);
     });
+  }
+
+  /**
+   * Format memory size for display
+   * @param bytes Memory usage in bytes
+   * @returns Formatted string
+   */
+  private formatMemorySize(bytes: number): string {
+    if (bytes < 1024) {
+      return `${bytes.toFixed(2)}B`;
+    } else if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(2)}KB`;
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+    } else {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+    }
   }
 
   /**
@@ -394,9 +491,13 @@ class BrowserLogger {
 
   public track<T>(fn: () => T, options?: ITrackOptions): T {
     const silent = options?.silent ?? false;
+    const includeMemory = options?.includeMemory ?? true;
     
     // Track the function execution
-    const result = this._executionTracker.track(fn, options);
+    const result = this._executionTracker.track(fn, {
+      ...options,
+      includeMemory
+    });
     
     // Log the execution flow if not silent
     if (!silent) {

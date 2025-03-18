@@ -1,6 +1,6 @@
 {
   "name": "traceperf",
-  "version": "0.1.7",
+  "version": "0.1.6",
   "description": "Advanced console logging & performance tracking for Node.js",
   "main": "dist/index.js",
   "module": "dist/esm/index.js",

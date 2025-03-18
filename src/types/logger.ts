@@ -147,7 +147,15 @@ export interface IPerformanceMonitor {
   /**
    * Get memory usage information
    * 
-   * @returns Memory usage in bytes
+   * @returns Memory usage object or undefined if not available
    */
-  getMemoryUsage(): { heapUsed: number; heapTotal: number; external: number; rss: number };
+  getMemoryUsage(): { heapUsed: number; heapTotal: number; external: number; rss: number } | undefined;
+  
+  /**
+   * Calculate memory difference between current and start memory
+   * 
+   * @param start - Starting memory usage snapshot
+   * @returns Memory difference in bytes
+   */
+  getMemoryDiff(start: { heapUsed: number }): number;
 } 

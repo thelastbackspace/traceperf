@@ -64,35 +64,37 @@ export class PerformanceMonitor implements IPerformanceMonitor {
   /**
    * Get memory usage information
    * 
-   * @returns Memory usage in bytes
+   * @returns Memory usage object
    */
-  public getMemoryUsage(): { heapUsed: number; heapTotal: number; external: number; rss: number } {
-    const memoryUsage = process.memoryUsage();
-    return {
-      heapUsed: memoryUsage.heapUsed,
-      heapTotal: memoryUsage.heapTotal,
-      external: memoryUsage.external,
-      rss: memoryUsage.rss,
-    };
+  public getMemoryUsage(): { heapUsed: number; heapTotal: number; external: number; rss: number } | undefined {
+    try {
+      return process.memoryUsage();
+    } catch (e) {
+      console.warn('Unable to track memory usage:', e);
+      return undefined;
+    }
   }
 
   /**
-   * Get memory difference between two points
+   * Calculate memory difference between current and start memory
    * 
-   * @param before - Memory usage before
-   * @param after - Memory usage after
-   * @returns Memory difference in bytes
+   * @param start - Starting memory usage snapshot
+   * @returns Memory difference or undefined
    */
-  public getMemoryDiff(
-    before: { heapUsed: number; heapTotal: number; external: number; rss: number },
-    after: { heapUsed: number; heapTotal: number; external: number; rss: number }
-  ): { heapUsed: number; heapTotal: number; external: number; rss: number } {
-    return {
-      heapUsed: after.heapUsed - before.heapUsed,
-      heapTotal: after.heapTotal - before.heapTotal,
-      external: after.external - before.external,
-      rss: after.rss - before.rss,
-    };
+  public getMemoryDiff(start: { heapUsed: number }): number {
+    try {
+      const current = this.getMemoryUsage();
+      if (!current) return 0;
+      
+      const diff = current.heapUsed - start.heapUsed;
+      
+      // Return zero instead of negative values
+      // Negative values usually indicate garbage collection, not actual memory release
+      return Math.max(0, diff);
+    } catch (e) {
+      console.warn('Error calculating memory usage:', e);
+      return 0;
+    }
   }
 
   /**
