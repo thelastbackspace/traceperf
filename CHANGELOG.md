@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2025-03-18
+
+### Fixed
+- Fixed memory tracking to provide more accurate and useful measurements
+- Improved memory delta reporting with clear +/- indicators for memory allocation/deallocation
+- Fixed negative memory values by better handling garbage collection effects
+- Added garbage collection triggering (when available) for more consistent memory measurements
+
+### Added
+- Added comprehensive documentation explaining how to interpret memory metrics
+- Added memory delta notation to clarify that values represent changes in memory, not absolute usage
+
 ## [0.1.6] - 2025-03-18
 
 ### Fixed

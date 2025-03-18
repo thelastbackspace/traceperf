@@ -59,8 +59,17 @@ export class ExecutionTracker implements IExecutionTracker {
     const includeMemory = options?.includeMemory ?? true;
     const enableNestedTracking = options?.enableNestedTracking ?? true;
     
+    // Ensure garbage collection if available before measuring memory
+    if (includeMemory && global.gc && typeof global.gc === 'function') {
+      try {
+        global.gc();
+      } catch (e) {
+        // Ignore if gc is not available
+      }
+    }
+    
     // Get memory usage before execution
-    const startMemory = includeMemory ? process.memoryUsage().heapUsed : undefined;
+    const startMemory = includeMemory ? process.memoryUsage() : undefined;
     
     // Start timing
     const startTime = getHighResTime();
@@ -109,7 +118,19 @@ export class ExecutionTracker implements IExecutionTracker {
       
       // Calculate memory usage
       if (includeMemory && startMemory !== undefined) {
-        execution.memoryUsage = process.memoryUsage().heapUsed - startMemory;
+        const endMemory = process.memoryUsage();
+        
+        // Calculate memory delta
+        const heapUsedDelta = endMemory.heapUsed - startMemory.heapUsed;
+        
+        // Only report positive memory change or significant negative change
+        // Small negative values might be due to garbage collection
+        if (heapUsedDelta > 0 || heapUsedDelta < -10000) {
+          execution.memoryUsage = heapUsedDelta;
+        } else {
+          // For very small negative changes, just report 0
+          execution.memoryUsage = 0;
+        }
       }
       
       // Restore the previous current execution

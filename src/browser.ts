@@ -137,6 +137,10 @@ class BrowserExecutionTracker {
     // Add to call stack
     this._callStack.push(fnName);
     
+    // Get memory usage before execution
+    const startMemory = performance && 'memory' in performance ? 
+      (performance as any).memory?.usedJSHeapSize : undefined;
+      
     // Create execution record
     const execution: any = {
       name: fnName,
@@ -152,7 +156,7 @@ class BrowserExecutionTracker {
       execution.parent = this._currentExecution;
       this._currentExecution.children.push(execution);
     } else {
-      // This is a root execution
+      // This is a root execution if no parent or if nested tracking is disabled
       this._executions.push(execution);
     }
     
@@ -162,46 +166,40 @@ class BrowserExecutionTracker {
     // Set this as the current execution
     this._currentExecution = execution;
     
-    let result: T;
-    
     try {
       // Execute the function
-      result = fn();
-    } catch (error) {
-      // End timing
+      return fn();
+    } finally {
+      // End timing and calculate duration
       const endTime = performance.now();
-      execution.endTime = endTime;
       execution.duration = endTime - execution.startTime;
+      
+      // Check if it's a bottleneck
       execution.isSlow = execution.duration > threshold;
+      
+      // Calculate memory usage if available
+      if (startMemory !== undefined && performance && 'memory' in performance) {
+        const endMemory = (performance as any).memory?.usedJSHeapSize;
+        if (endMemory !== undefined) {
+          // Calculate memory delta
+          const heapUsedDelta = endMemory - startMemory;
+          
+          // Only report positive memory change or significant negative change
+          if (heapUsedDelta > 0 || heapUsedDelta < -10000) {
+            execution.memoryUsage = heapUsedDelta;
+          } else {
+            // For very small negative changes, just report 0
+            execution.memoryUsage = 0;
+          }
+        }
+      }
       
       // Restore the previous current execution
       this._currentExecution = previousExecution;
       
       // Remove from call stack
       this._callStack.pop();
-      
-      // Re-throw the error
-      throw error;
     }
-    
-    // End timing
-    const endTime = performance.now();
-    execution.endTime = endTime;
-    execution.duration = endTime - execution.startTime;
-    execution.isSlow = execution.duration > threshold;
-    
-    // Generate suggestion if slow
-    if (execution.isSlow) {
-      execution.suggestion = this.generateSuggestion(fnName, execution.duration);
-    }
-    
-    // Restore the previous current execution
-    this._currentExecution = previousExecution;
-    
-    // Remove from call stack
-    this._callStack.pop();
-    
-    return result;
   }
 
   /**

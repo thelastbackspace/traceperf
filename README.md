@@ -271,6 +271,22 @@ tracePerf.track(fn, {
 });
 ```
 
+## Understanding Memory Metrics
+
+TracePerf tracks memory usage for each function execution. Here's how to interpret the memory metrics:
+
+- **Memory Delta**: The memory values shown represent the change in heap memory during the function execution, not the total memory used.
+- **Positive Values (+)**: Indicate memory was allocated during the function execution that wasn't garbage collected.
+- **Negative Values (-)**: Indicate memory was freed during the function execution, often due to garbage collection.
+- **Zero Values (0)**: Small memory changes are reported as zero to reduce noise.
+
+Memory tracking can help identify:
+- Functions that cause significant memory leaks (consistent high positive values)
+- Functions that trigger garbage collection (occasional large negative values)
+- Functions with excessive temporary object creation (large positive values followed by large negative values)
+
+Note that memory tracking isn't 100% accurate due to JavaScript's garbage collection, which can occur at unpredictable times. For the most reliable results, try running memory-intensive functions multiple times.
+
 ## Creating a Custom Logger
 
 ```javascript

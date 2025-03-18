@@ -116,14 +116,17 @@ export class AsciiArtGenerator {
   }
 
   /**
-   * Format memory usage in a human-readable format
+   * Format memory usage for display
    * 
-   * @param bytes - Memory usage in bytes
-   * @returns Formatted memory usage
+   * @param bytes - Memory usage in bytes (can be positive or negative)
+   * @returns Formatted memory usage with appropriate prefix
    */
   private formatMemory(bytes: number): string {
+    const isNegative = bytes < 0;
+    // Use absolute value for formatting
+    let absBytes = Math.abs(bytes);
     const units = ['B', 'KB', 'MB', 'GB'];
-    let size = bytes;
+    let size = absBytes;
     let unitIndex = 0;
     
     while (size >= 1024 && unitIndex < units.length - 1) {
@@ -131,6 +134,15 @@ export class AsciiArtGenerator {
       unitIndex++;
     }
     
-    return `${size.toFixed(2)}${units[unitIndex]}`;
+    // Format with up to 2 decimal places
+    const formattedSize = size.toFixed(2);
+    
+    // For memory deltas, indicate whether it's an increase (+) or decrease (-)
+    if (bytes === 0) {
+      return `0${units[unitIndex]}`;
+    } else {
+      const prefix = isNegative ? '-' : '+';
+      return `${prefix}${formattedSize}${units[unitIndex]}`;
+    }
   }
 } 
