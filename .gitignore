@@ -103,9 +103,9 @@ dist
 .pnp.*
 
 # Project specific files
-# prd.md         # Uncomment to exclude Product Requirements Document
-# architecture.md # Uncomment to exclude Architecture Document
-todo.md        # Uncomment to exclude Todo list 
+prd.md             # Product Requirements Document
+architecture.md    # Architecture Document
+todo.md            # Todo list 
 PUBLISHING.md
 post.md
 medium_blog_formatted.md
@@ -115,6 +115,13 @@ final-solution.js
 direct-tracking-example.js
 monkey-patch-example.js
 
+# Test and development files
+api-test.js
+import-test.js
+node-critical-test.js
+browser-critical-test.js
+simple-critical-test.js
+critical-evaluation.js
 auto-proxy-example.js
 manual-tracking-example.js
 decorator-example.js

@@ -34,8 +34,8 @@ export const getMemoryUsage = (): number => {
   }
   // Browser memory API if available
   else if (typeof performance !== 'undefined' && 'memory' in performance) {
-    // @ts-ignore - performance.memory exists in Chrome
-    return performance.memory.usedJSHeapSize;
+    // @ts-expect-error This is a browser-specific check
+    return window.performance.memory?.usedJSHeapSize || 0;
   }
   // Fallback when no memory API available
   return 0;
@@ -323,9 +323,8 @@ export class OptimizedExecutionTracker {
       return fn;
     }
     
-    // Create the tracked function
-    const self = this;
-    const trackedFn = function(this: any, ...args: Parameters<T>): ReturnType<T> {
+    // Create the tracked function using arrow function to preserve 'this'
+    const trackedFn = (...args: Parameters<T>): ReturnType<T> => {
       // Apply sampling - randomly decide whether to track this call
       const shouldSample = Math.random() < sampleRate;
       
@@ -335,11 +334,11 @@ export class OptimizedExecutionTracker {
       }
       
       // Start tracking the execution
-      const executionId = self.startTimer(
+      const executionId = this.startTimer(
         label,
         parentExecutionId,
         {
-          trackMemory: options.trackMemory !== undefined ? options.trackMemory : self.showMemoryUsage,
+          trackMemory: options.trackMemory !== undefined ? options.trackMemory : this.showMemoryUsage,
           captureArgs: options.captureArgs,
           args: args
         }
@@ -353,21 +352,21 @@ export class OptimizedExecutionTracker {
         if (result && typeof result.then === 'function') {
           return result
             .then((resolvedValue: any) => {
-              self.endTimer(executionId, resolvedValue);
+              this.endTimer(executionId, resolvedValue);
               return resolvedValue;
             })
             .catch((error: Error) => {
-              self.endTimer(executionId, undefined, error);
+              this.endTimer(executionId, undefined, error);
               throw error; // Re-throw to preserve error behavior
             }) as ReturnType<T>;
         }
         
         // Handle synchronous functions
-        self.endTimer(executionId, result);
+        this.endTimer(executionId, result);
         return result;
       } catch (error) {
         // Handle synchronous errors
-        self.endTimer(executionId, undefined, error as Error);
+        this.endTimer(executionId, undefined, error as Error);
         throw error; // Re-throw to preserve error behavior
       }
     };

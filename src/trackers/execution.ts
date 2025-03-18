@@ -150,12 +150,11 @@ export class ExecutionTracker implements IExecutionTracker {
     fn: T, 
     options?: Omit<ITrackOptions, 'label'> & { label?: string }
   ): (...args: Parameters<T>) => ReturnType<T> {
-    const self = this;
     const fnName = options?.label || fn.name || 'anonymous';
     
-    // Create a tracked version of the function
-    const trackedFn = function(this: any, ...args: Parameters<T>): ReturnType<T> {
-      return self.track(() => fn.apply(this, args), { 
+    // Create a tracked version of the function using arrow function to preserve 'this'
+    const trackedFn = (...args: Parameters<T>): ReturnType<T> => {
+      return this.track(() => fn.apply(this, args), { 
         ...options,
         label: fnName
       }) as ReturnType<T>;

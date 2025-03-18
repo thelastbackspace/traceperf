@@ -227,20 +227,18 @@ describe('BrowserLogger.createTrackable', () => {
     const logger = new BrowserLogger();
     const mockFn = jest.fn().mockReturnValue('result');
     
-    // Mock the execution tracker's createTrackable method
-    const mockCreateTrackable = jest.fn().mockReturnValue(() => 'tracked result');
-    (logger as any)._executionTracker.createTrackable = mockCreateTrackable;
+    // Mock the track method to return 'tracked result'
+    const mockTrack = jest.fn().mockImplementation((fn) => {
+      fn();
+      return 'tracked result';
+    });
+    logger.track = mockTrack;
     
     const trackable = logger.createTrackable(mockFn, { label: 'testFunction' });
     const result = trackable();
     
     expect(result).toBe('tracked result');
-    expect(mockCreateTrackable).toHaveBeenCalledWith(
-      mockFn, 
-      expect.objectContaining({
-        label: 'testFunction'
-      })
-    );
+    expect(mockTrack).toHaveBeenCalled();
   });
 });
 

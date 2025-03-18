@@ -1,6 +1,7 @@
 // Import optimized performance monitor from core
 import { OptimizedPerformanceMonitor, TrackingModes } from './core/optimized-performance-monitor';
 import { ITracePerfConfig } from './types';
+import * as typesExports from './types';
 
 // Create singleton instance
 const tracePerf = new OptimizedPerformanceMonitor();
@@ -27,6 +28,6 @@ if (typeof module !== 'undefined' && module.exports) {
     OptimizedPerformanceMonitor,
     TrackingMode: TrackingModes,
     // Re-export types
-    ...require('./types')
+    ...typesExports
   });
 } 

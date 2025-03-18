@@ -297,23 +297,24 @@ class BrowserExecutionTracker {
     fn: T, 
     options?: Omit<ITrackOptions, 'label'> & { label?: string }
   ): (...args: Parameters<T>) => ReturnType<T> {
-    const self = this;
-    const fnName = options?.label || fn.name || 'anonymous';
+    const label = options?.label || fn.name || 'anonymous';
+    const threshold = options?.threshold ?? 100; // Use a sensible default of 100ms
+    const enableNestedTracking = options?.enableNestedTracking ?? true;
+    const trackMemory = options?.trackMemory ?? true;
     const trackingMode = options?.trackingMode || TrackingMode.BALANCED;
     
-    // Create the tracked version of the function
-    const trackedFn = function(this: any, ...args: Parameters<T>): ReturnType<T> {
-      return self.track(() => fn.apply(this, args), { 
+    // Create a tracked version of the function using arrow function
+    const self = this;
+    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+      return self.track(() => fn.apply(this, args), {
         ...options,
-        label: fnName,
+        label,
+        threshold,
+        enableNestedTracking,
+        trackMemory,
         trackingMode
       }) as ReturnType<T>;
-    };
-    
-    // Store the original and tracked function for future reference
-    this._trackedFunctions.set(fn, trackedFn as unknown as Function);
-    
-    return trackedFn;
+    } as (...args: Parameters<T>) => ReturnType<T>;
   }
 
   /**
@@ -560,15 +561,18 @@ class BrowserLogger {
     const trackMemory = options?.trackMemory ?? true;
     const trackingMode = options?.trackingMode || this._trackingMode;
     
-    // Create a new trackable function
-    return this._executionTracker.createTrackable(fn, {
-      ...options,
-      label,
-      threshold,
-      enableNestedTracking,
-      trackMemory,
-      trackingMode
-    });
+    // Create a tracked version of the function using arrow function
+    const self = this;
+    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+      return self.track(() => fn.apply(this, args), {
+        ...options,
+        label,
+        threshold,
+        enableNestedTracking,
+        trackMemory,
+        trackingMode
+      }) as ReturnType<T>;
+    } as (...args: Parameters<T>) => ReturnType<T>;
   }
 
   private log(level: LogLevel, message: string | object, args: any[]): void {
