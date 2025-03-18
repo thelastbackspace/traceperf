@@ -169,18 +169,46 @@ traceperf.track(() => {
             <h2>Browser Support</h2>
             <pre><code>&lt;script src="dist/traceperf.browser.js"&gt;&lt;/script&gt;
 &lt;script&gt;
-  const { createTracePerf, TrackingMode } = TracePerf;
+  const { createTracePerf, BrowserLogger } = TracePerf;
   
   const browserTracker = createTracePerf({
-    trackingMode: TrackingMode.BALANCED,
-    trackMemory: true
+    logger: new BrowserLogger({
+      silent: false,
+      trackMemory: true
+    })
   });
   
   // Track a DOM operation
   browserTracker.track(() => {
     document.getElementById('output').textContent = 'Updated';
   }, { label: 'updateDOM' });
+
+  // Track async operations
+  await browserTracker.track(async () => {
+    const response = await fetch('/api/data');
+    return response.json();
+  }, { label: 'fetchData' });
+
+  // Create trackable functions
+  const trackedFn = browserTracker.createTrackable(() => {
+    // Function implementation
+  }, { label: 'trackedBrowserFn' });
 &lt;/script&gt;</code></pre>
+
+            <h3>ES Modules Usage</h3>
+            <pre><code>import { createTracePerf, BrowserLogger } from 'traceperf/browser';
+
+const browserTracker = createTracePerf({
+  logger: new BrowserLogger({
+    silent: false,
+    trackMemory: true
+  })
+});
+
+// Use the same API as in Node.js
+browserTracker.track(() => {
+  // Your browser-side code
+});</code></pre>
         </section>
 
         <section id="documentation">

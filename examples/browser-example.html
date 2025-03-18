@@ -11,144 +11,72 @@
       margin: 0 auto;
       padding: 20px;
       line-height: 1.6;
-      color: #333;
     }
-    h1, h2, h3 {
-      color: #0066cc;
+    .output-box {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      margin: 10px 0;
     }
     button {
-      background-color: #0066cc;
+      background: #0066cc;
       color: white;
       border: none;
-      padding: 10px 15px;
+      padding: 10px 20px;
       border-radius: 4px;
       cursor: pointer;
-      margin: 5px 0;
-      font-size: 14px;
+      margin: 10px 0;
     }
     button:hover {
-      background-color: #0055aa;
+      background: #0052a3;
     }
-    .result-box {
-      background-color: #f5f5f5;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 15px;
-      margin: 10px 0;
-      min-height: 20px;
-    }
-    .instructions {
-      background-color: #ffffee;
-      border-left: 4px solid #ffcc00;
-      padding: 10px 15px;
-      margin: 20px 0;
-    }
-    code {
-      font-family: monospace;
-      background-color: #f0f0f0;
-      padding: 2px 4px;
-      border-radius: 3px;
+    .result {
+      color: #666;
+      font-size: 0.9em;
     }
   </style>
 </head>
 <body>
   <h1>TracePerf Browser Example</h1>
-  
-  <div class="instructions">
-    <p><strong>Instructions:</strong> Open your browser console to see the performance tracking output. Click the buttons below to trigger different tracked operations.</p>
+  <p>This example demonstrates how to use TracePerf in a browser environment. Open the browser console to see the performance tracking output.</p>
+
+  <div>
+    <h2>Example 1: Basic DOM Operation</h2>
+    <div id="output" class="output-box">Waiting for update...</div>
   </div>
 
-  <h2>Basic DOM Operations</h2>
-  <button id="action-button">Perform DOM Operation</button>
-  <div id="output" class="result-box">Results will appear here...</div>
-  <div id="click-result" class="result-box">Click event results will appear here...</div>
+  <div>
+    <h2>Example 2: Async Operation</h2>
+    <div id="data-output" class="output-box">Waiting for data...</div>
+  </div>
 
-  <h2>Async Operations</h2>
-  <button id="fetch-button">Fetch Data</button>
-  <div id="data-output" class="result-box">Fetched data will appear here...</div>
+  <div>
+    <h2>Example 3: Event Handler Tracking</h2>
+    <button id="action-button">Click me!</button>
+    <div id="click-result" class="result"></div>
+  </div>
 
-  <h2>Performance Comparison</h2>
-  <button id="compare-button">Run Performance Comparison</button>
-  <div id="compare-output" class="result-box">Performance comparison results will appear here...</div>
-
-  <h2>Manual Tracking</h2>
-  <p>You can also use the global <code>traceperf</code> variable in the console to track your own functions:</p>
-  <pre>traceperf.track(() => { 
-  // Your code here
-  console.log('My tracked code'); 
-}, { label: 'manualTracking' });</pre>
-
-  <!-- First load the TracePerf library (assumed to be built and available) -->
+  <!-- Include the TracePerf browser bundle -->
   <script src="../dist/traceperf.browser.js"></script>
   
-  <!-- Then load our example code -->
+  <!-- Include the example code -->
   <script src="browser-example.js"></script>
-  
-  <!-- Additional interactive example code -->
-  <script>
-    // Set up button event listeners
-    document.getElementById('fetch-button').addEventListener('click', function() {
-      // This will trigger the async example in browser-example.js
-      traceperf.track(async () => {
-        const element = document.getElementById('data-output');
-        element.textContent = 'Fetching data...';
-        
-        // Simulate async data fetch
-        const result = await new Promise(resolve => {
-          setTimeout(() => {
-            resolve({ 
-              timestamp: new Date().toISOString(),
-              randomData: Array.from({length: 5}, () => Math.floor(Math.random() * 100))
-            });
-          }, 500);
-        });
-        
-        // Update UI with result
-        element.textContent = JSON.stringify(result, null, 2);
-        return result;
-      }, { label: 'buttonTriggeredFetch', trackMemory: true });
-    });
 
-    document.getElementById('compare-button').addEventListener('click', function() {
-      const element = document.getElementById('compare-output');
-      element.textContent = 'Running performance comparison...';
-      
-      const { TrackingMode } = TracePerf;
-      
-      // Create trackers with different modes
-      const performanceTracker = TracePerf.createTracePerf({
-        trackingMode: TrackingMode.PERFORMANCE,
-        trackMemory: true
-      });
-      
-      const detailedTracker = TracePerf.createTracePerf({
-        trackingMode: TrackingMode.DETAILED,
-        trackMemory: true
-      });
-      
-      // Function to test
-      function complexOperation() {
-        let result = 0;
-        for (let i = 0; i < 1000000; i++) {
-          result += Math.sin(i * 0.01) * Math.cos(i * 0.02);
-        }
-        return result;
-      }
-      
-      // Run with performance tracking mode
-      const perfResult = performanceTracker.track(complexOperation, {
-        label: 'complexOp_Performance'
-      });
-      
-      // Run with detailed tracking mode
-      const detailedResult = detailedTracker.track(complexOperation, {
-        label: 'complexOp_Detailed'
-      });
-      
-      // Display results
-      element.textContent = 'Complex operation completed with both tracking modes.\n' +
-                            'Check the console for detailed performance information.';
-    });
-  </script>
+  <div>
+    <h3>Try it in the Console</h3>
+    <p>The tracker is available in the console as <code>traceperf</code>. Try these examples:</p>
+    <pre>
+// Track a simple operation
+traceperf.track(() => {
+    console.log('Hello from tracked function!');
+}, { label: 'consoleTest' });
+
+// Track an async operation
+traceperf.track(async () => {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return 'Done!';
+}, { label: 'asyncTest' });
+    </pre>
+  </div>
 </body>
 </html> 

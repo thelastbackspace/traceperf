@@ -132,15 +132,88 @@ const customTracker = createTracePerf({
 
 ## Browser Support
 
-TracePerf includes a browser-compatible version:
+TracePerf provides a fully synchronized browser implementation that matches the Node.js API:
 
 ```javascript
-import traceperf from 'traceperf/browser';
+import { createTracePerf, BrowserLogger } from 'traceperf/browser';
 
-// Use the same API as in Node.js
-traceperf.track(() => {
-  // Your code
+// Create a browser-optimized instance
+const browserTracker = createTracePerf({
+  logger: new BrowserLogger({
+    silent: false,
+    trackMemory: true
+  })
 });
+
+// Track function execution
+browserTracker.track(() => {
+  // Your browser-side code
+}, { label: 'browserOperation' });
+
+// Create trackable functions
+const trackedFn = browserTracker.createTrackable(() => {
+  // Function implementation
+}, { label: 'trackedBrowserFn' });
+
+// Track async operations
+await browserTracker.track(async () => {
+  const response = await fetch('/api/data');
+  return response.json();
+}, { label: 'fetchData' });
+```
+
+You can also use it via script tag:
+
+```html
+<script src="dist/traceperf.browser.js"></script>
+<script>
+  const { createTracePerf, BrowserLogger } = TracePerf;
+  
+  const browserTracker = createTracePerf({
+    logger: new BrowserLogger({
+      silent: false,
+      trackMemory: true
+    })
+  });
+  
+  // Use the same API as in Node.js
+  browserTracker.track(() => {
+    // DOM operations or other browser-side logic
+  }, { label: 'domOperation' });
+</script>
+```
+
+## Synchronized Features
+
+TracePerf now provides a consistent API across Node.js and browser environments:
+
+- **Unified Tracking API**: The same tracking methods work identically in both environments
+- **Consistent Configuration**: Logger and tracker options are synchronized
+- **Memory Tracking**: Both environments support memory usage tracking
+- **Performance Optimization**: Browser-specific optimizations while maintaining API compatibility
+- **Execution Flow**: Track complex execution flows consistently across environments
+
+Example of cross-environment usage:
+
+```javascript
+// Node.js
+const { createTracePerf } = require('traceperf');
+const nodeTracker = createTracePerf();
+
+// Browser
+import { createTracePerf } from 'traceperf/browser';
+const browserTracker = createTracePerf();
+
+// Both environments support the same API
+async function trackOperation(tracker) {
+  return await tracker.track(async () => {
+    const result = await someAsyncOperation();
+    return processResult(result);
+  }, { 
+    label: 'mainOperation',
+    trackMemory: true
+  });
+}
 ```
 
 ## Examples
@@ -294,28 +367,3 @@ tracker.track(slowFunction, { threshold: 50 });
 tracker.track(criticalFunction, { threshold: 10 }); // Low threshold for critical paths
 tracker.track(backgroundTask, { threshold: 200 }); // Higher threshold for background tasks
 ```
-
-### Memory Tracking
-
-```javascript
-const { createTracePerf } = require('traceperf');
-const tracker = createTracePerf({ trackMemory: true });
-
-// Track memory usage for memory-intensive operations
-const result = tracker.track(() => {
-  // Memory-intensive operations
-  const largeArray = new Array(1000000).fill(Math.random());
-  return processArray(largeArray);
-}, { label: 'memoryIntensiveOperation' });
-```
-
-For more examples, see the example files in the `examples/` directory.
-
-## License
-
-MIT 
-
-## Website
-
-Visit our website at [traceperf.com](https://traceperf.com) for more information, interactive examples, and detailed documentation. 
-
