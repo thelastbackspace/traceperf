@@ -1,5 +1,5 @@
 /**
- * Auto-Tracking Example
+ * Nested Function Tracking Example
  * 
  * This example demonstrates two approaches to tracking nested function calls:
  * 1. Using createTrackable to create tracked versions of functions
@@ -55,14 +55,18 @@ function example1() {
   const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchData' });
   
   // Replace the global references to enable tracking
+  // This step is crucial for tracking nested calls
   global.simulateWork = trackedSimulateWork;
   global.calculateResults = trackedCalculateResults;
   global.processData = trackedProcessData;
   
   // Execute the tracked top-level function
+  console.log('Running with the createTrackable approach...');
   const result = trackedFetchData();
   
   console.log('\nResult:', result);
+  console.log('\nNote: For the createTrackable approach to work properly with nested functions,');
+  console.log('you must replace the global references to the functions as shown above.');
 }
 
 // Example 2: Using track directly
@@ -72,7 +76,13 @@ function example2() {
   // Clear any previous execution records
   tracePerf.track(() => {}, { silent: true });
   
+  // Reset the global references to their original forms
+  global.simulateWork = simulateWork;
+  global.calculateResults = calculateResults;
+  global.processData = processData;
+  
   // Track the execution of the top-level function
+  console.log('Running with explicit nested track calls...');
   const result = tracePerf.track(() => {
     console.log('Fetching data...');
     
@@ -109,8 +119,40 @@ function example2() {
   }, { label: 'fetchData' });
   
   console.log('\nResult:', result);
+  console.log('\nNote: The explicit nested track calls approach requires more manual instrumentation');
+  console.log('but gives you precise control over what gets tracked.');
+}
+
+// Example 3: Disabling nested tracking
+function example3() {
+  console.log('\n--- Example 3: Disabling nested tracking ---\n');
+  
+  // Clear any previous execution records
+  tracePerf.track(() => {}, { silent: true });
+  
+  // Reset the global references to their original forms
+  global.simulateWork = simulateWork;
+  global.calculateResults = calculateResults;
+  global.processData = processData;
+  
+  // Create trackable version only for the top-level function
+  const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchData' });
+  
+  // Execute with nested tracking disabled
+  console.log('Running with enableNestedTracking set to false...');
+  const result = tracePerf.track(() => {
+    return trackedFetchData();
+  }, { 
+    label: 'trackedFetchData',
+    enableNestedTracking: false 
+  });
+  
+  console.log('\nResult:', result);
+  console.log('\nNote: With enableNestedTracking set to false, only the top-level function is tracked,');
+  console.log('and no nested function calls are included in the tracking.');
 }
 
 // Run the examples
 example1();
 example2();
+example3();

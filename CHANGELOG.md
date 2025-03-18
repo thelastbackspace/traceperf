@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2025-03-16
+
+### Fixed
+- Fixed implementation of nested function tracking
+- Added proper support for the `createTrackable` method to reliably track nested function calls
+- Improved code to maintain references to tracked functions
+- Updated README.md with clearer examples of proper nested function tracking
+- Removed misleading references to automatic tracking of nested function calls
+- Added better documentation for both recommended approaches to nested function tracking
+
+### Changed
+- Clarified that `createTrackable` approach requires explicitly replacing function references
+- Updated examples to show the most reliable patterns for nested function tracking
+- Simplified API description for nested tracking options
+
+### Removed
+- Removed unsupported `autoTracking` functionality that wasn't fully implemented
+
 ## [0.1.5] - 2025-03-16
 
 ### Changed

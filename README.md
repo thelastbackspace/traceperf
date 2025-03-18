@@ -151,16 +151,17 @@ function DataComponent() {
 
 ### Tracking Nested Function Calls
 
-TracePerf provides two approaches for tracking nested function calls, allowing you to visualize the complete execution flow of your application:
+TracePerf provides two reliable approaches for tracking nested function calls, allowing you to visualize the complete execution flow of your application:
 
 1. **Using the `createTrackable` method** (recommended)
 2. **Using nested `track` calls**
 
 #### Using createTrackable (Recommended)
 
-The `createTrackable` method creates tracked versions of your functions that can be used in place of the original functions:
+The `createTrackable` method creates tracked versions of your functions that can be used in place of the original functions. This approach requires explicitly replacing function references but provides the most reliable nested tracking:
 
 ```javascript
+// Original functions
 function fetchData() {
   processData();
   calculateResults();
@@ -179,7 +180,8 @@ const trackedFetchData = tracePerf.createTrackable(fetchData, { label: 'fetchDat
 const trackedProcessData = tracePerf.createTrackable(processData, { label: 'processData' });
 const trackedCalculateResults = tracePerf.createTrackable(calculateResults, { label: 'calculateResults' });
 
-// Replace the global references to enable tracking
+// Replace the original function references to enable tracking
+// This step is crucial for tracking nested calls
 global.processData = trackedProcessData;
 global.calculateResults = trackedCalculateResults;
 
@@ -208,7 +210,7 @@ Execution Flow:
 
 #### Using Nested Track Calls
 
-For more complex scenarios, you can use nested `track` calls:
+For more complex scenarios or when you don't want to replace function references, you can explicitly use nested `track` calls:
 
 ```javascript
 tracePerf.track(() => {
@@ -226,16 +228,18 @@ tracePerf.track(() => {
 }, { label: 'topLevelFunction' });
 ```
 
+This method requires more manual instrumentation but gives you precise control over what gets tracked.
+
 #### Controlling Nested Tracking
 
-You can control nested tracking with the following option:
+You can control nested tracking behavior with the following option:
 
 ```javascript
-// Disable nested tracking entirely
+// Disable nested tracking entirely for a specific function call
 tracePerf.track(fetchData, { enableNestedTracking: false });
 ```
 
-For more examples, see the `examples/nested-tracking.js` and `examples/auto-tracking-example.js` files in the repository.
+For more examples, see the `examples/nested-tracking.js` and `examples/test/nested-function-test.js` files in the repository.
 
 ## API Reference for Nested Tracking
 
@@ -265,7 +269,9 @@ tracePerf.track(fn, {
   // ... other options
   enableNestedTracking: true, // Enable/disable nested tracking
 });
-``` 
+```
+
+## Creating a Custom Logger
 
 ```javascript
 const { createLogger } = require('traceperf');

@@ -23,23 +23,13 @@ export interface ITrackOptions {
   /**
    * Whether to track nested function calls
    * 
-   * Note: With automatic tracking enabled, TracePerf will attempt to
-   * automatically detect and track nested function calls without requiring
-   * manual tracking of each function.
+   * When enabled, TracePerf will track nested function calls that are made
+   * within the tracked function. This requires either using the createTrackable
+   * method or explicitly wrapping nested function calls with track().
    * 
    * @default true
    */
   enableNestedTracking?: boolean;
-  
-  /**
-   * Whether to automatically track nested function calls
-   * 
-   * When enabled, TracePerf will analyze the function source code to identify
-   * potential function calls and automatically track them.
-   * 
-   * @default true
-   */
-  autoTracking?: boolean;
   
   /**
    * Whether to suppress logging

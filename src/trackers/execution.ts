@@ -28,6 +28,7 @@ export class ExecutionTracker implements IExecutionTracker {
   private _asciiGenerator: AsciiArtGenerator;
   private _defaultThreshold: number;
   private _globalScope: Record<string, any>;
+  private _trackedFunctions: Map<Function, Function> = new Map();
 
   /**
    * Create a new ExecutionTracker instance
@@ -136,12 +137,18 @@ export class ExecutionTracker implements IExecutionTracker {
     const self = this;
     const fnName = options?.label || fn.name || 'anonymous';
     
-    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+    // Create the tracked version of the function
+    const trackedFn = function(this: any, ...args: Parameters<T>): ReturnType<T> {
       return self.track(() => fn.apply(this, args), { 
         ...options,
         label: fnName
       }) as ReturnType<T>;
     };
+    
+    // Store the original and tracked function for future reference
+    this._trackedFunctions.set(fn, trackedFn as unknown as Function);
+    
+    return trackedFn;
   }
 
   /**
