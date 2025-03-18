@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - 2025-03-16
+## [0.1.6] - 2025-03-18
 
 ### Fixed
 - Fixed implementation of nested function tracking
@@ -13,15 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved code to maintain references to tracked functions
 - Updated README.md with clearer examples of proper nested function tracking
 - Removed misleading references to automatic tracking of nested function calls
-- Added better documentation for both recommended approaches to nested function tracking
+
+### Added
+- Added comprehensive test examples in `examples/test/` directory
+- Added test for browser module CommonJS compatibility
+- Added test for object methods tracking with proper `this` context
+- Added example for disabling nested tracking with `enableNestedTracking` option
 
 ### Changed
 - Clarified that `createTrackable` approach requires explicitly replacing function references
 - Updated examples to show the most reliable patterns for nested function tracking
-- Simplified API description for nested tracking options
+- Simplified API documentation for nested tracking options
+- Renamed auto-tracking-example.js to nested-function-example.js to better reflect its purpose
+- Updated README.md to reference the new example files
 
 ### Removed
 - Removed unsupported `autoTracking` functionality that wasn't fully implemented
+- Cleaned up unnecessary and redundant example files from the repository
+- Removed redundant nested-tracking.js and execution-flow.js examples in favor of the more comprehensive nested-function-example.js
 
 ## [0.1.5] - 2025-03-16
 

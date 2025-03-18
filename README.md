@@ -239,7 +239,7 @@ You can control nested tracking behavior with the following option:
 tracePerf.track(fetchData, { enableNestedTracking: false });
 ```
 
-For more examples, see the `examples/nested-tracking.js` and `examples/test/nested-function-test.js` files in the repository.
+For more examples, see the `examples/nested-function-example.js` and `examples/test/nested-function-test.js` files in the repository.
 
 ## API Reference for Nested Tracking
 
