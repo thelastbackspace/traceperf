@@ -10,6 +10,7 @@ import {
   openTelemetryExporter,
   toChromeTrace,
   TrackingMode,
+  StatsCollector,
   OtelApiLike,
 } from '../index';
 import { busyWait, captureLogs } from './helpers/console';
@@ -143,19 +144,33 @@ describe('timing detail', () => {
 });
 
 describe('statistics', () => {
-  test('per-label count, errors and percentiles', () => {
+  test('percentiles, min/max/mean are computed correctly', () => {
+    // Deterministic: feed known durations straight into the collector
+    const collector = new StatsCollector({ reservoirSize: 1000 });
+    const record = (duration: number, error?: unknown) => ({
+      id: 'x', label: 'op', parentId: null, startTime: 0, endTime: duration, startEpochMs: 0, duration,
+      selfDuration: duration / 2, syncDuration: duration, async: false, children: [], threshold: 0,
+      trackingMode: 'balanced', silent: true, ...(error ? { error } : {}),
+    }) as ExecutionRecord;
+    for (let i = 1; i <= 100; i++) collector.add(record(i, i === 100 ? new Error('x') : undefined));
+    expect(collector.get('op')).toEqual({
+      count: 100, errors: 1, total: 5050, mean: 50.5, min: 1, max: 100,
+      p50: 50, p95: 95, p99: 99, selfMean: 25.25,
+    });
+  });
+
+  test('tracked calls feed stats: counts and errors are exact', () => {
     const tp = createTracePerf({ silent: true });
-    const f = tp.createTrackable((ms: number) => { busyWait(ms); if (ms > 8) throw new Error('slow'); }, { label: 'work' });
-    for (const ms of [1, 1, 1, 1, 10]) {
+    const f = tp.createTrackable((ms: number) => { busyWait(ms); if (ms > 20) throw new Error('slow'); }, { label: 'work' });
+    for (const ms of [0, 0, 0, 0, 30]) {
       try { f(ms); } catch { /* expected */ }
     }
     const s = tp.getStats('work')!;
     expect(s.count).toBe(5);
     expect(s.errors).toBe(1);
-    expect(s.min).toBeLessThan(5);
-    expect(s.max).toBeGreaterThanOrEqual(9);
-    expect(s.p50).toBeLessThan(5);
-    expect(s.p99).toBeGreaterThanOrEqual(9);
+    expect(s.max).toBeGreaterThanOrEqual(29);
+    expect(s.p50).toBeLessThan(s.max);
+    expect(s.min).toBeLessThanOrEqual(s.p50);
     expect(s.mean).toBeCloseTo(s.total / 5, 6);
   });
 

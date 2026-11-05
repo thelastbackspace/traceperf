@@ -67,7 +67,8 @@ describe('expressMiddleware', () => {
 describe('fastifyPlugin', () => {
   test('one root per request, labelled by route, with nested work', async () => {
     const { tp, roots, db } = collect();
-    const app = Fastify();
+    // fetch keeps connections alive; close them so app.close() does not wait (Node 18)
+    const app = Fastify({ forceCloseConnections: true });
     await app.register(fastifyPlugin(tp));
     app.get('/items/:id', async () => {
       await db('db.item');

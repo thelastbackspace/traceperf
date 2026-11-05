@@ -75,10 +75,10 @@ describe('browser tracking', () => {
   });
 
   test('threshold hides fast calls', () => {
-    const tracker = createTracePerf({ threshold: 20 });
-    tracker.track(() => busyWait(1), { label: 'fastOperation' });
-    tracker.track(() => busyWait(30), { label: 'slowOperation' });
-    createTracePerf().track(() => busyWait(1), { label: 'perCallFast', threshold: 20 });
+    const tracker = createTracePerf({ threshold: 60 });
+    tracker.track(() => 1, { label: 'fastOperation' });
+    tracker.track(() => busyWait(70), { label: 'slowOperation' });
+    createTracePerf().track(() => 1, { label: 'perCallFast', threshold: 60 });
     expect(logs.text()).not.toContain('fastOperation');
     expect(logs.text()).not.toContain('perCallFast');
     expect(logs.text()).toContain('slowOperation');

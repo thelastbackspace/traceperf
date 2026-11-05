@@ -10,15 +10,16 @@ describe('threshold', () => {
   afterEach(() => logs.restore());
 
   test('instance threshold hides fast calls and reports slow ones', () => {
-    const tp = createTracePerf({ threshold: 30 });
-    tp.track(() => busyWait(1), { label: 'fast' });
-    tp.track(() => busyWait(40), { label: 'slow' });
+    // Wide margins: a no-op vs. a 60ms threshold, so CPU contention can't flip it
+    const tp = createTracePerf({ threshold: 60 });
+    tp.track(() => 1, { label: 'fast' });
+    tp.track(() => busyWait(70), { label: 'slow' });
     expect(logs.text()).not.toContain('fast');
     expect(logs.text()).toContain('slow');
   });
 
   test('per-call threshold hides fast calls', () => {
-    createTracePerf().track(() => busyWait(1), { label: 'fastPerCall', threshold: 30 });
+    createTracePerf().track(() => 1, { label: 'fastPerCall', threshold: 60 });
     expect(logs.lines()).toEqual([]);
   });
 
