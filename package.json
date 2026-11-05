@@ -60,7 +60,9 @@
     "verify:docs": "node scripts/check-docs.js",
     "verify": "npm run lint:package && npm run verify:package && npm run verify:docs",
     "bench": "node scripts/bench.js",
-    "bench:check": "node scripts/bench.js --check"
+    "bench:check": "node scripts/bench.js --check",
+    "typecheck": "tsc --noEmit -p tsconfig.eslint.json",
+    "test:runtimes": "bun test/runtimes/smoke.mjs && deno run --allow-read --allow-env --allow-sys test/runtimes/smoke.mjs"
   },
   "keywords": [
     "performance",
