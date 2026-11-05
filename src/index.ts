@@ -25,6 +25,7 @@ export function traced(options: TrackOptions = {}) {
 // Export types and classes for advanced usage
 export * from './types';
 export * from './core';
+export * from './integrations';
 export { OptimizedPerformanceMonitor };
 export { TrackingModes as TrackingMode };
 
