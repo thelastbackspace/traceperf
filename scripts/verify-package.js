@@ -50,9 +50,12 @@ function project(name, type) {
 }
 
 // 1. pack
-// `npm pack <dir>` from the work dir (npm 6 has no --pack-destination)
-const packOut = run(npm, ['pack', '--ignore-scripts', '--silent', root], work).trim().split('\n').pop();
+// Pack inside the package dir (`npm pack <dir>` runs "prepare" even with
+// --ignore-scripts on newer npm) and move it out (npm 6 has no --pack-destination)
+const packOut = run(npm, ['pack', '--ignore-scripts', '--silent'], root).trim().split('\n').pop();
 const tarball = path.join(work, packOut);
+fs.copyFileSync(path.join(root, packOut), tarball); // not rename: work may be on another device
+fs.unlinkSync(path.join(root, packOut));
 console.log(`packed ${path.basename(tarball)} (node ${process.version})`);
 
 // 2. CommonJS consumer
