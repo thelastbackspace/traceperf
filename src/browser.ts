@@ -5,7 +5,7 @@
  * in React, Next.js, or other frontend applications.
  */
 
-import { ILoggerConfig, LogLevel, LogMode, LogMeta, ITrackOptions } from './types';
+import { ILoggerConfig, LogLevel, LogMode, ITrackOptions } from './types';
 
 // Define tracking mode constants to avoid circular dependencies
 export const TrackingMode = {
@@ -13,6 +13,30 @@ export const TrackingMode = {
   BALANCED: 'balanced',
   DETAILED: 'detailed',
   DEBUG: 'debug'
+};
+
+/**
+ * Configuration accepted by the browser createTracePerf()/BrowserLogger
+ */
+export interface IBrowserTracePerfConfig extends Partial<ILoggerConfig> {
+  /** Suppress console output (default false) */
+  silent?: boolean;
+  /** Track memory usage where the browser exposes it (default true) */
+  trackMemory?: boolean;
+  /** Only report calls taking at least this many milliseconds */
+  threshold?: number;
+  /** Attach nested tracked calls to their caller (default true) */
+  enableNestedTracking?: boolean;
+  /** Use an existing logger instead of creating a new one */
+  logger?: BrowserLogger;
+}
+
+const isNativePromise = (value: unknown): value is Promise<unknown> =>
+  value instanceof Promise || Object.prototype.toString.call(value) === '[object Promise]';
+
+const preserveSignature = (wrapper: Function, fn: Function): void => {
+  Object.defineProperty(wrapper, 'name', { value: fn.name, configurable: true });
+  Object.defineProperty(wrapper, 'length', { value: fn.length, configurable: true });
 };
 
 /**
@@ -67,7 +91,7 @@ class BrowserPerformanceMonitor {
       }
       
       // Firefox has a different memory API
-      if (window && (window as any).performance && (window as any).performance.memory) {
+      if (typeof window !== 'undefined' && (window as any).performance && (window as any).performance.memory) {
         const memory = (window as any).performance.memory;
         return {
           heapUsed: memory.usedJSHeapSize || 0,
@@ -136,14 +160,18 @@ class BrowserExecutionTracker {
   private _globalScope: Record<string, any>;
   private _trackedFunctions: Map<Function, Function> = new Map();
   private _performanceMonitor: BrowserPerformanceMonitor;
+  private _onRootComplete?: (execution: any) => void;
 
   /**
    * Create a new BrowserExecutionTracker instance
    * 
-   * @param options - Tracker options
+   * @param options - Tracker options. When `onRootComplete` is given, each
+   *   finished top-level execution is handed to it and then discarded
+   *   instead of being kept for generateFlowChart().
    */
-  constructor(options: { defaultThreshold?: number } = {}) {
+  constructor(options: { defaultThreshold?: number; onRootComplete?: (execution: any) => void } = {}) {
     this._defaultThreshold = options.defaultThreshold ?? 100; // ms
+    this._onRootComplete = options.onRootComplete;
     this._performanceMonitor = new BrowserPerformanceMonitor(options);
     
     // Get a reference to the global scope (window in browsers)
@@ -204,6 +232,9 @@ class BrowserExecutionTracker {
       level: this._callStack.length - 1,
       startTime: performance.now(),
       children: [],
+      complete: false,
+      silent: options.silent,
+      reportThreshold: options.reportThreshold,
     };
     
     // Set parent-child relationship
@@ -212,6 +243,7 @@ class BrowserExecutionTracker {
       this._currentExecution.children.push(execution);
     } else {
       // This is a root execution
+      execution.level = 0;
       this._executions.push(execution);
     }
     
@@ -221,65 +253,67 @@ class BrowserExecutionTracker {
     // Set this as the current execution
     this._currentExecution = execution;
     
-    let result: T;
-    
-    try {
-      // Execute the function
-      result = fn();
-    } catch (error) {
-      // End timing
+    const finish = () => {
       const endTime = performance.now();
       execution.endTime = endTime;
       execution.duration = endTime - execution.startTime;
       execution.isSlow = execution.duration > threshold;
+      execution.complete = true;
       
       // Calculate memory usage
       if (trackMemory && startMemory !== undefined) {
         try {
-          const memoryDiff = this._performanceMonitor.getMemoryDiff(startMemory);
-          execution.memoryUsage = memoryDiff;
+          execution.memoryUsage = this._performanceMonitor.getMemoryDiff(startMemory);
         } catch (e) {
           console.warn('Error calculating memory usage:', e);
         }
       }
       
-      // Restore the previous current execution
+      // Generate suggestion if slow
+      if (execution.isSlow) {
+        execution.suggestion = this.generateSuggestion(fnName, execution.duration);
+      }
+      
+      // Hand finished top-level executions to the owner, then forget them
+      if (!execution.parent && this._onRootComplete) {
+        const index = this._executions.indexOf(execution);
+        if (index !== -1) {
+          this._executions.splice(index, 1);
+        }
+        this._onRootComplete(execution);
+      }
+    };
+    
+    let result: T;
+    try {
+      // Execute the function
+      result = fn();
+    } catch (error) {
       this._currentExecution = previousExecution;
-      
-      // Remove from call stack
       this._callStack.pop();
-      
-      // Re-throw the error
+      finish();
       throw error;
     }
     
-    // End timing
-    const endTime = performance.now();
-    execution.endTime = endTime;
-    execution.duration = endTime - execution.startTime;
-    execution.isSlow = execution.duration > threshold;
-    
-    // Calculate memory usage
-    if (trackMemory && startMemory !== undefined) {
-      try {
-        const memoryDiff = this._performanceMonitor.getMemoryDiff(startMemory);
-        execution.memoryUsage = memoryDiff;
-      } catch (e) {
-        console.warn('Error calculating memory usage:', e);
-      }
-    }
-    
-    // Generate suggestion if slow
-    if (execution.isSlow) {
-      execution.suggestion = this.generateSuggestion(fnName, execution.duration);
-    }
-    
-    // Restore the previous current execution
+    // Nesting is tracked synchronously: restore the caller as current
     this._currentExecution = previousExecution;
-    
-    // Remove from call stack
     this._callStack.pop();
     
+    // Async functions / promises: time until settled
+    if (isNativePromise(result)) {
+      return result.then(
+        value => {
+          finish();
+          return value;
+        },
+        error => {
+          finish();
+          throw error;
+        }
+      ) as unknown as T;
+    }
+    
+    finish();
     return result;
   }
 
@@ -313,9 +347,11 @@ class BrowserExecutionTracker {
         trackMemory,
         trackingMode
       }) as ReturnType<T>;
-    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+    const tracked = function(this: any, ...args: Parameters<T>): ReturnType<T> {
       return run(this, args);
-    } as (...args: Parameters<T>) => ReturnType<T>;
+    };
+    preserveSignature(tracked, fn);
+    return tracked as (...args: Parameters<T>) => ReturnType<T>;
   }
 
   /**
@@ -332,14 +368,14 @@ class BrowserExecutionTracker {
    * 
    * @returns ASCII flow chart of the execution
    */
-  public generateFlowChart(): string {
+  public generateFlowChart(executions: any[] = this._executions): string {
     let result = 'Execution Flow:\n';
     
     // Process each execution
-    this.prepareExecutionData(this._executions).forEach(execution => {
+    this.prepareExecutionData(executions).forEach(execution => {
       const indent = '  '.repeat(execution.level);
       const durationStr = execution.duration.toFixed(2);
-      const slowMarker = execution.isSlow ? ' [SLOW]' : '';
+      const slowMarker = execution.isSlow ? ' [SLOW]' : execution.complete === false ? ' [PENDING]' : '';
       
       let memoryStr = '';
       if (execution.memoryUsage !== undefined && execution.memoryUsage > 0) {
@@ -375,7 +411,8 @@ class BrowserExecutionTracker {
         isSlow: execution.isSlow,
         suggestion: execution.suggestion,
         level: execution.level,
-        memoryUsage: execution.memoryUsage
+        memoryUsage: execution.memoryUsage,
+        complete: execution.complete
       });
       
       // Add children recursively
@@ -400,7 +437,8 @@ class BrowserExecutionTracker {
         isSlow: child.isSlow,
         suggestion: child.suggestion,
         level: child.level,
-        memoryUsage: child.memoryUsage
+        memoryUsage: child.memoryUsage,
+        complete: child.complete
       });
       
       // Add grandchildren recursively
@@ -444,12 +482,21 @@ class BrowserLogger {
   private _executionTracker: BrowserExecutionTracker;
   private _performanceMonitor: BrowserPerformanceMonitor;
   private _trackingMode: string = TrackingMode.BALANCED;
+  private _silent: boolean;
+  private _trackMemory: boolean;
+  private _threshold?: number;
+  private _enableNestedTracking: boolean;
 
-  constructor(config: Partial<ILoggerConfig> = {}) {
+  constructor(config: IBrowserTracePerfConfig = {}) {
     this._mode = config.mode || 'dev';
     this._trackingMode = config.trackingMode || TrackingMode.BALANCED;
+    this._silent = config.silent ?? false;
+    this._trackMemory = config.trackMemory ?? true;
+    this._threshold = config.threshold;
+    this._enableNestedTracking = config.enableNestedTracking ?? true;
     this._executionTracker = new BrowserExecutionTracker({
       defaultThreshold: config.performanceThreshold || 100,
+      onRootComplete: execution => this.report(execution),
     });
     this._performanceMonitor = new BrowserPerformanceMonitor({
       defaultThreshold: config.performanceThreshold || 100,
@@ -522,24 +569,29 @@ class BrowserLogger {
   }
 
   public track<T>(fn: () => T, options?: ITrackOptions): T {
-    const silent = options?.silent ?? false;
-    const trackMemory = options?.trackMemory ?? true;
-    const trackingMode = options?.trackingMode || this._trackingMode;
+    const threshold = options?.threshold ?? this._threshold;
     
-    // Track the function execution
-    const result = this._executionTracker.track(fn, {
+    // The tree is printed by report() when the outermost call finishes
+    // (after the promise settles for async functions).
+    return this._executionTracker.track(fn, {
       ...options,
-      trackMemory,
-      trackingMode
+      ...(threshold !== undefined ? { threshold } : {}),
+      silent: options?.silent ?? this._silent,
+      reportThreshold: threshold ?? 0,
+      trackMemory: options?.trackMemory ?? this._trackMemory,
+      enableNestedTracking: options?.enableNestedTracking ?? this._enableNestedTracking,
+      trackingMode: options?.trackingMode || this._trackingMode
     });
-    
-    // Log the execution flow if not silent
-    if (!silent) {
-      const flowChart = this._executionTracker.generateFlowChart();
-      console.log(flowChart);
+  }
+
+  /**
+   * Print a finished top-level execution unless silenced or below threshold
+   */
+  private report(execution: any): void {
+    if (execution.silent || execution.duration < (execution.reportThreshold ?? 0)) {
+      return;
     }
-    
-    return result;
+    console.log(this._executionTracker.generateFlowChart([execution]).replace(/\n$/, ''));
   }
 
   /**
@@ -557,24 +609,19 @@ class BrowserLogger {
     options?: Omit<ITrackOptions, 'label'> & { label?: string }
   ): (...args: Parameters<T>) => ReturnType<T> {
     const label = options?.label || fn.name || 'anonymous';
-    const threshold = options?.threshold ?? 100; // Use a sensible default of 100ms
-    const enableNestedTracking = options?.enableNestedTracking ?? true;
-    const trackMemory = options?.trackMemory ?? true;
-    const trackingMode = options?.trackingMode || this._trackingMode;
     
-    // Use a regular function so callers keep their own `this`
+    // Use a regular function so callers keep their own `this`;
+    // unspecified options are resolved by track() at call time
     const run = (thisArg: any, args: Parameters<T>): ReturnType<T> =>
       this.track(() => fn.apply(thisArg, args), {
         ...options,
-        label,
-        threshold,
-        enableNestedTracking,
-        trackMemory,
-        trackingMode
+        label
       }) as ReturnType<T>;
-    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+    const tracked = function(this: any, ...args: Parameters<T>): ReturnType<T> {
       return run(this, args);
-    } as (...args: Parameters<T>) => ReturnType<T>;
+    };
+    preserveSignature(tracked, fn);
+    return tracked as (...args: Parameters<T>) => ReturnType<T>;
   }
 
   private log(level: LogLevel, message: string | object, args: any[]): void {
@@ -627,7 +674,10 @@ class BrowserLogger {
  * @param config Configuration options
  * @returns Browser logger instance
  */
-export function createBrowserLogger(config: Partial<ILoggerConfig> = {}): BrowserLogger {
+export function createBrowserLogger(config: IBrowserTracePerfConfig = {}): BrowserLogger {
+  if (config.logger instanceof BrowserLogger) {
+    return config.logger;
+  }
   return new BrowserLogger(config);
 }
 
@@ -637,7 +687,7 @@ export function createBrowserLogger(config: Partial<ILoggerConfig> = {}): Browse
  * @param config Configuration options
  * @returns Browser logger instance
  */
-export function createTracePerf(config: Partial<ILoggerConfig> = {}): BrowserLogger {
+export function createTracePerf(config: IBrowserTracePerfConfig = {}): BrowserLogger {
   return createBrowserLogger(config);
 }
 
