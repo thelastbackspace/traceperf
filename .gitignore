@@ -138,3 +138,5 @@ test-results/
 playwright-report/
 traceperf-example-trace.json
 docs/api/
+test/runtimes/traceperf.bundle.mjs
+test/runtimes/workerd.log

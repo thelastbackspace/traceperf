@@ -66,4 +66,11 @@ export interface TracePerfConfig {
   plugins?: TracePerfPlugin[];
   /** Called with every finished top-level tree (also when silent) */
   onComplete?: (root: ExecutionRecord) => void;
+  /**
+   * AsyncLocalStorage class to use for nesting across `await`. Detected
+   * automatically on Node.js, Bun, Deno and where it is a global; pass it
+   * explicitly on runtimes where it is only importable, e.g. Cloudflare
+   * Workers: `import { AsyncLocalStorage } from 'node:async_hooks'`.
+   */
+  asyncLocalStorage?: new () => any;
 }

@@ -122,6 +122,15 @@ jobs:
       with:
         deno-version: v2.x
     - run: deno run --allow-read --allow-env --allow-sys test/runtimes/smoke.mjs
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+    - run: npm ci
+    - name: Vercel Edge runtime (edge-runtime VM)
+      run: node test/runtimes/edge.test.js
+    - name: Cloudflare Workers (workerd)
+      run: test/runtimes/workerd.sh
 
   publish-npm:
     needs: [build, test, runtime, browser, other-runtimes]

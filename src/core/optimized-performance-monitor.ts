@@ -103,6 +103,7 @@ export interface ExecutionTrackerOptions {
   stats?: boolean | StatsOptions;
   reporter?: (root: ExecutionRecord) => void;
   plugins?: TracePerfPlugin[];
+  asyncLocalStorage?: new () => any;
 }
 
 /**
@@ -195,10 +196,12 @@ interface ExecutionContext {
 }
 
 const loadAsyncLocalStorage = (): (new () => any) | undefined =>
-  loadNodeBuiltin('async_hooks')?.AsyncLocalStorage;
+  loadNodeBuiltin('async_hooks')?.AsyncLocalStorage ??
+  // Edge runtimes (e.g. Next.js Edge) expose it as a global
+  (typeof globalThis !== 'undefined' ? (globalThis as any).AsyncLocalStorage : undefined);
 
-const createExecutionContext = (): ExecutionContext => {
-  const AsyncLocalStorage = loadAsyncLocalStorage();
+const createExecutionContext = (provided?: new () => any): ExecutionContext => {
+  const AsyncLocalStorage = provided ?? loadAsyncLocalStorage();
   if (AsyncLocalStorage) {
     const storage = new AsyncLocalStorage();
     return {
@@ -260,7 +263,7 @@ export class OptimizedExecutionTracker {
   private executionTree: Map<string, ExecutionData> = new Map();
   private currentExecutionId: number = 0;
   private activeExecutions: Map<string, ExecutionData> = new Map();
-  private context: ExecutionContext = createExecutionContext();
+  private context: ExecutionContext;
   
   // Configuration
   public showMemoryUsage: boolean;
@@ -292,6 +295,7 @@ export class OptimizedExecutionTracker {
     this.trackingMode = options.trackingMode ?? TrackingModes.BALANCED;
     this.defaultThreshold = options.threshold ?? 0;
     this.defaultSampleRate = clampRate(options.sampleRate ?? 1);
+    this.context = createExecutionContext(options.asyncLocalStorage);
     this.enabled = options.enabled ?? true;
     this.blockingThreshold = options.blockingThreshold ?? 50;
     this.reporter = options.reporter ?? null;
@@ -870,7 +874,8 @@ export class OptimizedPerformanceMonitor {
       blockingThreshold: this.config.blockingThreshold,
       stats: options.stats,
       reporter: options.reporter,
-      plugins: options.plugins
+      plugins: options.plugins,
+      asyncLocalStorage: options.asyncLocalStorage
     });
     
     if (options.onComplete) {

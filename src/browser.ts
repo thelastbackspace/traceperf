@@ -72,7 +72,8 @@ class BrowserLogger extends OptimizedPerformanceMonitor {
       stats: config.stats,
       plugins: config.plugins,
       onComplete: config.onComplete,
-      reporter: config.reporter
+      reporter: config.reporter,
+      asyncLocalStorage: config.asyncLocalStorage
     });
     this._mode = config.mode || 'dev';
     this._slowThreshold = config.performanceThreshold || 100;
