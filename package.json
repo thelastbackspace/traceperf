@@ -62,7 +62,9 @@
     "bench": "node scripts/bench.js",
     "bench:check": "node scripts/bench.js --check",
     "typecheck": "tsc --noEmit -p tsconfig.eslint.json",
-    "test:runtimes": "bun test/runtimes/smoke.mjs && deno run --allow-read --allow-env --allow-sys test/runtimes/smoke.mjs"
+    "test:runtimes": "bun test/runtimes/smoke.mjs && deno run --allow-read --allow-env --allow-sys test/runtimes/smoke.mjs",
+    "bench:compare": "node scripts/compare.js",
+    "docs:api": "typedoc"
   },
   "keywords": [
     "performance",
