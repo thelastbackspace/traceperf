@@ -26,6 +26,8 @@ jobs:
       run: npm run verify:package
     - name: Run every documented example and compare its output
       run: npm run verify:docs
+    - name: Overhead and bundle-size budgets
+      run: npm run bench:check
     - uses: actions/upload-artifact@v4
       with:
         name: dist

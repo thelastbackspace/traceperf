@@ -55,7 +55,7 @@ describe('browser tracking', () => {
     expect(logs.lines()[1]).not.toContain('first');
     for (let i = 0; i < 500; i++) tracker.track(() => i, { silent: true });
     const core = (tracker as any).executionTracker;
-    expect(Object.keys(core.executionTree)).toHaveLength(0);
+    expect(core.executionTree.size).toBe(0);
     expect(core.activeExecutions.size).toBe(0);
   });
 

@@ -6,7 +6,7 @@
 import { createTracePerf, OptimizedPerformanceMonitor } from '../index';
 import { busyWait, captureLogs } from './helpers/console';
 
-function internals(tp: OptimizedPerformanceMonitor): { tree: Record<string, unknown>; active: Map<string, unknown> } {
+function internals(tp: OptimizedPerformanceMonitor): { tree: Map<string, unknown>; active: Map<string, unknown> } {
   const tracker = (tp as any).executionTracker;
   return { tree: tracker.executionTree, active: tracker.activeExecutions };
 }
@@ -93,7 +93,7 @@ describe('nested tracking', () => {
     for (let i = 0; i < 2000; i++) parent();
     for (let i = 0; i < 50; i++) await tp.track(async () => leaf());
     const { tree, active } = internals(tp);
-    expect(Object.keys(tree)).toHaveLength(0);
+    expect(tree.size).toBe(0);
     expect(active.size).toBe(0);
   });
 });

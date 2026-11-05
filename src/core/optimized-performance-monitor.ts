@@ -67,19 +67,16 @@ export const getMemoryUsage = (): number => {
  * Get high-resolution timestamp with environment detection
  * @returns Timestamp in nanoseconds
  */
-export const getTimestamp = (): number => {
-  // Use performance.now() in browsers (convert to nanoseconds)
-  if (typeof performance !== 'undefined' && performance.now) {
-    return performance.now() * 1000000;
-  }
-  // Use process.hrtime() in Node.js
-  else if (typeof process !== 'undefined' && process.hrtime) {
-    const hrTime = process.hrtime();
-    return hrTime[0] * 1000000000 + hrTime[1];
-  }
-  // Fallback to Date.now() (converted to nanoseconds)
-  return Date.now() * 1000000;
-};
+export const getTimestamp: () => number =
+  // Clock chosen once at load time (the hot path should not re-detect it)
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? () => performance.now() * 1000000
+    : typeof process !== 'undefined' && typeof process.hrtime === 'function'
+      ? () => {
+          const hrTime = process.hrtime();
+          return hrTime[0] * 1000000000 + hrTime[1];
+        }
+      : () => Date.now() * 1000000;
 
 /**
  * Calculate time difference between two timestamps
@@ -192,6 +189,8 @@ export const formatArg = (arg: unknown): string => {
 interface ExecutionContext {
   current(): string | null;
   run<R>(executionId: string, fn: () => R): R;
+  /** run() for fn.apply(thisArg, args) without allocating a closure per call */
+  apply<R>(executionId: string, fn: (...args: any[]) => R, thisArg: unknown, args: ArrayLike<unknown>): R;
 }
 
 const loadAsyncLocalStorage = (): (new () => any) | undefined =>
@@ -203,21 +202,25 @@ const createExecutionContext = (): ExecutionContext => {
     const storage = new AsyncLocalStorage();
     return {
       current: () => storage.getStore() ?? null,
-      run: (executionId, fn) => storage.run(executionId, fn)
+      run: (executionId, fn) => storage.run(executionId, fn),
+      // AsyncLocalStorage.run forwards extra arguments to the callback
+      apply: (executionId, fn, thisArg, args) => storage.run(executionId, Reflect.apply, fn, thisArg, args)
     };
   }
   let current: string | null = null;
+  const run = <R>(executionId: string, fn: () => R): R => {
+    const previous = current;
+    current = executionId;
+    try {
+      return fn();
+    } finally {
+      current = previous;
+    }
+  };
   return {
     current: () => current,
-    run: (executionId, fn) => {
-      const previous = current;
-      current = executionId;
-      try {
-        return fn();
-      } finally {
-        current = previous;
-      }
-    }
+    run,
+    apply: (executionId, fn, thisArg, args) => run(executionId, () => fn.apply(thisArg, args as unknown[]))
   };
 };
 
@@ -245,13 +248,15 @@ const NOOP_SPAN: Span = {
 const clampRate = (rate: number): number => Math.max(0, Math.min(1, rate));
 
 const isNativePromise = (value: unknown): value is Promise<unknown> =>
-  value instanceof Promise || Object.prototype.toString.call(value) === '[object Promise]';
+  value !== null && typeof value === 'object' &&
+  (value instanceof Promise ||
+    (typeof (value as any).then === 'function' && Object.prototype.toString.call(value) === '[object Promise]'));
 
 /**
  * Optimized tracker for individual function executions
  */
 export class OptimizedExecutionTracker {
-  private executionTree: Record<string, ExecutionData> = {};
+  private executionTree: Map<string, ExecutionData> = new Map();
   private currentExecutionId: number = 0;
   private activeExecutions: Map<string, ExecutionData> = new Map();
   private context: ExecutionContext = createExecutionContext();
@@ -326,7 +331,12 @@ export class OptimizedExecutionTracker {
    * @param options Additional options
    * @returns Execution ID
    */
-  public startTimer(label: string, parentExecutionId: string | null = null, options: TimerOptions = {}): string {
+  public startTimer(
+    label: string,
+    parentExecutionId: string | null = null,
+    options: TimerOptions = {},
+    args: ArrayLike<unknown> | undefined = options.args
+  ): string {
     // Per-execution settings, falling back to the tracker's current config
     const trackingMode = options.trackingMode ?? this.trackingMode;
     const trackMemory = options.trackMemory ?? this.showMemoryUsage;
@@ -344,8 +354,8 @@ export class OptimizedExecutionTracker {
       duration: 0,
       parentId: parentExecutionId,
       children: [],
-      args: options.captureArgs && options.args ? 
-        Array.from(options.args).map(formatArg) : [],
+      args: options.captureArgs && args ?
+        Array.from(args).map(formatArg) : undefined,
       complete: false,
       silent: options.silent ?? this.silent,
       trackingMode,
@@ -407,7 +417,7 @@ export class OptimizedExecutionTracker {
     // parent's tree once the parent finishes.
     const parentRunning = execution.parentId !== null && this.activeExecutions.has(execution.parentId);
     if (parentRunning) {
-      this.executionTree[executionId] = execution;
+      this.executionTree.set(executionId, execution);
       return execution;
     }
     
@@ -416,7 +426,9 @@ export class OptimizedExecutionTracker {
     const record = this._toRecord(execution);
 
     // Release the finished tree so memory use does not grow with call count
-    this._release(execution);
+    if (execution.children.length > 0) {
+      this._release(execution);
+    }
 
     if (this.stats) {
       this.stats.addTree(record);
@@ -439,10 +451,10 @@ export class OptimizedExecutionTracker {
    * Drop a finished execution and its finished descendants
    */
   private _release(execution: ExecutionData): void {
-    delete this.executionTree[execution.id];
     for (const childId of execution.children) {
-      const child = this.executionTree[childId];
+      const child = this.executionTree.get(childId);
       if (child) {
+        this.executionTree.delete(childId);
         this._release(child);
       }
     }
@@ -462,14 +474,20 @@ export class OptimizedExecutionTracker {
    * Convert a finished execution (and its finished children) to a record tree
    */
   private _toRecord(execution: ExecutionData): ExecutionRecord {
-    const children = execution.children
-      .map(childId => this.executionTree[childId])
-      .filter((child): child is ExecutionData => child !== undefined)
-      .map(child => this._toRecord(child));
     const startTime = execution.startTime / 1000000;
     const endTime = execution.endTime / 1000000;
     const duration = execution.duration / 1000000;
-    const covered = coveredLength(children.map(c => [Math.max(c.startTime, startTime), Math.min(c.endTime, endTime)] as [number, number]));
+    const children: ExecutionRecord[] = [];
+    let covered = 0;
+    if (execution.children.length > 0) {
+      for (const childId of execution.children) {
+        const child = this.executionTree.get(childId);
+        if (child) {
+          children.push(this._toRecord(child));
+        }
+      }
+      covered = coveredLength(children.map(c => [Math.max(c.startTime, startTime), Math.min(c.endTime, endTime)] as [number, number]));
+    }
     const isAsync = execution.syncEndTime !== undefined;
     const record: ExecutionRecord = {
       id: execution.id,
@@ -516,6 +534,74 @@ export class OptimizedExecutionTracker {
   }
 
   /**
+   * Run one call of `fn` with tracking (shared by createTrackable and track)
+   */
+  private _invoke<T extends (...args: any[]) => any>(
+    fn: T,
+    thisArg: unknown,
+    args: Parameters<T>,
+    options: Record<string, any>,
+    label: string
+  ): ReturnType<T> {
+    // Disabled: call straight through
+    if (!this.enabled) {
+      return fn.apply(thisArg, args);
+    }
+
+    // Apply sampling - randomly decide whether to track this call
+    const sampleRate = options.sampleRate !== undefined ?
+      clampRate(options.sampleRate) : this.defaultSampleRate;
+    const shouldSample = Math.random() < sampleRate;
+    
+    // If not sampling this call, just execute the function directly
+    if (!shouldSample) {
+      return fn.apply(thisArg, args);
+    }
+    
+    const nested = this.enableNestedTracking && options.enableNestedTracking !== false;
+    const explicitParentId: string | null = options.parentExecutionId || null;
+    const parentExecutionId = explicitParentId ?? (nested ? this.context.current() : null);
+    
+    // Start tracking the execution
+    // The options object already has the TimerOptions fields; pass it as is
+    const executionId = this.startTimer(label, parentExecutionId, options as TimerOptions, args);
+    
+    let result: ReturnType<T>;
+    try {
+      // Execute the function with the caller's `this`, as the current
+      // execution so nested tracked calls attach to it
+      result = nested ?
+        this.context.apply(executionId, fn, thisArg, args) :
+        fn.apply(thisArg, args);
+    } catch (error) {
+      // Handle synchronous errors
+      this.endTimer(executionId, undefined, error as Error);
+      throw error; // Re-throw to preserve error behavior
+    }
+    
+    // Native promises (incl. async functions): time until settled.
+    // Other thenables are returned untouched - calling their then() could
+    // trigger side effects (e.g. query builders) or change their type.
+    if (isNativePromise(result)) {
+      this.markSyncEnd(executionId);
+      return result.then(
+        (resolvedValue: unknown) => {
+          this.endTimer(executionId, resolvedValue);
+          return resolvedValue;
+        },
+        (error: unknown) => {
+          this.endTimer(executionId, undefined, error as Error);
+          throw error; // Re-throw to preserve error behavior
+        }
+      ) as ReturnType<T>;
+    }
+    
+    // Handle synchronous functions
+    this.endTimer(executionId, result);
+    return result;
+  }
+
+  /**
    * Create a trackable version of a function
    * @param fn Function to track
    * @param options Tracking options
@@ -530,7 +616,6 @@ export class OptimizedExecutionTracker {
     }
     
     const label = options.label || fn.name || 'anonymous';
-    const explicitParentId: string | null = options.parentExecutionId || null;
     const silent = options.silent ?? this.silent;
     const trackingMode = options.trackingMode || this.trackingMode;
     
@@ -541,74 +626,9 @@ export class OptimizedExecutionTracker {
       return fn;
     }
     
-    const invoke = (thisArg: unknown, args: Parameters<T>): ReturnType<T> => {
-      // Disabled: call straight through
-      if (!this.enabled) {
-        return fn.apply(thisArg, args);
-      }
+    const invoke = (thisArg: unknown, args: Parameters<T>): ReturnType<T> =>
+      this._invoke(fn, thisArg, args, options, label);
 
-      // Apply sampling - randomly decide whether to track this call
-      const sampleRate = options.sampleRate !== undefined ?
-        clampRate(options.sampleRate) : this.defaultSampleRate;
-      const shouldSample = Math.random() < sampleRate;
-      
-      // If not sampling this call, just execute the function directly
-      if (!shouldSample) {
-        return fn.apply(thisArg, args);
-      }
-      
-      const nested = this.enableNestedTracking && options.enableNestedTracking !== false;
-      const parentExecutionId = explicitParentId ?? (nested ? this.context.current() : null);
-      
-      // Start tracking the execution
-      const executionId = this.startTimer(
-        label,
-        parentExecutionId,
-        {
-          trackMemory: options.trackMemory,
-          captureArgs: options.captureArgs,
-          args: args,
-          silent: options.silent,
-          trackingMode: options.trackingMode,
-          threshold: options.threshold
-        }
-      );
-      
-      let result: ReturnType<T>;
-      try {
-        // Execute the function with the caller's `this`, as the current
-        // execution so nested tracked calls attach to it
-        result = nested ?
-          this.context.run(executionId, () => fn.apply(thisArg, args)) :
-          fn.apply(thisArg, args);
-      } catch (error) {
-        // Handle synchronous errors
-        this.endTimer(executionId, undefined, error as Error);
-        throw error; // Re-throw to preserve error behavior
-      }
-      
-      // Native promises (incl. async functions): time until settled.
-      // Other thenables are returned untouched - calling their then() could
-      // trigger side effects (e.g. query builders) or change their type.
-      if (isNativePromise(result)) {
-        this.markSyncEnd(executionId);
-        return result.then(
-          (resolvedValue: unknown) => {
-            this.endTimer(executionId, resolvedValue);
-            return resolvedValue;
-          },
-          (error: unknown) => {
-            this.endTimer(executionId, undefined, error as Error);
-            throw error; // Re-throw to preserve error behavior
-          }
-        ) as ReturnType<T>;
-      }
-      
-      // Handle synchronous functions
-      this.endTimer(executionId, result);
-      return result;
-    };
-    
     // A regular function (not an arrow) so callers keep their own `this`
     const trackedFn = function (this: unknown, ...args: Parameters<T>): ReturnType<T> {
       return invoke(this, args);
@@ -715,16 +735,24 @@ export class OptimizedExecutionTracker {
    * @returns Function result
    */
   public track<T>(fn: () => T, options: Record<string, any> = {}): T {
-    // Create a trackable version and call it immediately
-    const trackableFn = this.createTrackable(fn, options);
-    return trackableFn.apply(options.thisContext, options.args || []);
+    if (typeof fn !== 'function') {
+      throw new Error('First argument must be a function');
+    }
+    // Same fast path as createTrackable, without building a wrapper per call
+    if ((options.trackingMode || this.trackingMode) === TrackingModes.PERFORMANCE &&
+        (options.silent ?? this.silent) &&
+        !this.enableNestedTracking) {
+      return (fn as (...args: unknown[]) => T).apply(options.thisContext, options.args || []);
+    }
+    const label = options.label || fn.name || 'anonymous';
+    return this._invoke(fn as (...args: any[]) => T, options.thisContext, (options.args || []) as [], options, label);
   }
 
   /**
    * Reset the tracker state
    */
   public reset(): void {
-    this.executionTree = {};
+    this.executionTree = new Map();
     this.currentExecutionId = 0;
     this.activeExecutions = new Map();
     if (this.stats) {
@@ -805,10 +833,7 @@ export class OptimizedPerformanceMonitor {
     
     // Only per-call options are passed down; anything left out falls back to
     // this instance's *current* configuration when the call runs.
-    return this.executionTracker.track(fn, {
-      ...options,
-      label: options.label || fn.name || 'anonymous'
-    });
+    return this.executionTracker.track(fn, options);
   }
 
   /**
@@ -825,10 +850,7 @@ export class OptimizedPerformanceMonitor {
       throw new Error('First argument must be a function');
     }
     
-    return this.executionTracker.createTrackable(fn, {
-      ...options,
-      label: options.label || fn.name || 'anonymous'
-    });
+    return this.executionTracker.createTrackable(fn, options);
   }
 
   /**

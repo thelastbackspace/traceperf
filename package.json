@@ -55,7 +55,9 @@
     "lint:package": "publint --strict && attw --pack .",
     "test:browser": "playwright test",
     "verify:docs": "node scripts/check-docs.js",
-    "verify": "npm run lint:package && npm run verify:package && npm run verify:docs"
+    "verify": "npm run lint:package && npm run verify:package && npm run verify:docs",
+    "bench": "node scripts/bench.js",
+    "bench:check": "node scripts/bench.js --check"
   },
   "keywords": [
     "performance",
