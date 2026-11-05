@@ -89,3 +89,24 @@ test('bundled main entry (traceperf) runs in the browser', async ({ page }) => {
   expect(text).toMatch(/└─ outer: .*\n {2}└─ inner: /);
   expect(logs.filter(l => l.type === 'pageerror')).toEqual([]);
 });
+
+test('performanceTimeline: tracked calls become User Timing measures with DevTools track data', async ({ page }) => {
+  await collectLogs(page);
+  await page.addScriptTag({
+    content: bundle(`
+      import { createTracePerf, performanceTimeline } from 'traceperf/browser';
+      window.seen = [];
+      new PerformanceObserver(list => window.seen.push(...list.getEntries().map(e => ({ name: e.name, duration: e.duration, detail: e.detail })))).observe({ type: 'measure', buffered: true });
+      const tp = createTracePerf({ silent: true, plugins: [performanceTimeline()] });
+      tp.track(() => { const s = performance.now(); while (performance.now() - s < 5) {} }, { label: 'renderList' });
+      window.done = true;
+    `),
+  });
+  await expect.poll(() => page.evaluate(() => window.seen.length)).toBeGreaterThan(0);
+  const seen = await page.evaluate(() => window.seen);
+  const entry = seen.find(e => e.name === 'renderList');
+  expect(entry.duration).toBeGreaterThanOrEqual(4);
+  expect(entry.detail.devtools).toMatchObject({ dataType: 'track-entry', track: 'traceperf' });
+  // not left in the timeline by default
+  expect(await page.evaluate(() => performance.getEntriesByName('renderList').length)).toBe(0);
+});

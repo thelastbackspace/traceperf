@@ -285,6 +285,13 @@ export {
   BrowserLogger
 };
 
+// Plugins and exporters that work in browsers
+export { performanceTimeline } from './core/timeline';
+export { toChromeTrace, jsonLinesExporter, openTelemetryExporter, recordToJSON } from './core/exporters';
+export { formatTree } from './core/records';
+export { instrumentFetch } from './instrument';
+export type { ExecutionRecord, TracePerfPlugin } from './core/records';
+
 // <cjs-compat>
 // CommonJS compatibility (stripped from the ESM build)
 if (typeof module !== 'undefined' && module.exports) {
