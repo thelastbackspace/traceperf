@@ -149,7 +149,8 @@ try {
       fs.writeFileSync(script, source);
       let out;
       try {
-        out = execFileSync(process.execPath, [script], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
+        // cwd is the scratch dir so examples that write files leave nothing behind
+        out = execFileSync(process.execPath, [script], { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 });
       } catch (error) {
         failures++;
         console.log(`FAIL ${id}: threw\n${String(error.stderr || error.message).split('\n').slice(0, 8).join('\n')}`);
