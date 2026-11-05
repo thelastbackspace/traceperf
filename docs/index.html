@@ -127,7 +127,7 @@ const result = tracker.track(() => {
 }, { label: 'memoryIntensiveOperation' });</code></pre>
 
             <h3>Output:</h3>
-            <pre class="output"><code>└─ memoryIntensiveOperation: 25.22ms 📊 11.29MB</code></pre>
+            <pre class="output"><code>└─ memoryIntensiveOperation: 25.005 ms 📊 +15335.69 KB</code></pre>
         </section>
 
         <section id="nested-tracking">
@@ -135,9 +135,9 @@ const result = tracker.track(() => {
             <pre><code>const { createTracePerf } = require('traceperf');
 const traceperf = createTracePerf({ enableNestedTracking: true });
 
-// Define some functions
+// Define some functions (call the *tracked* versions so they nest)
 function processData(data) {
-  return transformData(data);
+  return trackedTransformData(data);
 }
 
 function transformData(data) {
@@ -160,9 +160,9 @@ traceperf.track(() => {
 }, { label: 'mainOperation' });</code></pre>
 
             <h3>Output:</h3>
-            <pre class="output"><code>└─ mainOperation: 0.58ms
-   └─ processData: 0.33ms
-      └─ transformData: 0.12ms</code></pre>
+            <pre class="output"><code>└─ mainOperation: 0.580 ms 📊 +3.12 KB
+  └─ processData: 0.330 ms 📊 +1.40 KB
+    └─ transformData: 0.120 ms 📊 +0.75 KB</code></pre>
         </section>
 
         <section id="browser-support">

@@ -46,6 +46,10 @@ async function main() {
 
 TracePerf provides different tracking modes to balance performance with detail:
 
+- `PERFORMANCE`: lowest overhead. No memory sampling and **no console output**, even with `silent: false`.
+- `BALANCED` (default): prints an execution tree with duration and heap change.
+- `DETAILED` / `DEBUG`: like `BALANCED`, and failed calls also show their error message (`✖ message`).
+
 ```javascript
 const { TrackingMode, createTracePerf } = require('traceperf');
 
@@ -88,6 +92,25 @@ const trackedFunction = traceperf.createTrackable(myFunction, {
 const sum = trackedFunction(5, 3); // will be tracked
 ```
 
+Output (one tree per outermost tracked call, printed when it finishes):
+
+```
+└─ addition: 0.088 ms 📊 +2.48 KB
+```
+
+### Logging Arguments
+
+Pass `captureArgs: true` to include a short, safe rendering of the arguments in the output:
+
+```javascript
+const getUser = traceperf.createTrackable((id, opts) => ({ id }), {
+  label: 'getUser',
+  captureArgs: true
+});
+getUser(123, { cache: true });
+// └─ getUser(123, {"cache":true}): 0.051 ms 📊 +0.98 KB
+```
+
 ## Tracking Methods in a Module
 
 ```javascript
@@ -122,7 +145,8 @@ const customTracker = createTracePerf({
   // Enable tracking of nested function calls
   enableNestedTracking: true,
   
-  // Minimum execution time to track (milliseconds)
+  // Only report calls that take at least this long (milliseconds).
+  // Default 0: report every call.
   threshold: 50,
   
   // Percentage of function calls to track (0.0 to 1.0)
@@ -132,7 +156,7 @@ const customTracker = createTracePerf({
 
 ## Browser Support
 
-TracePerf provides a fully synchronized browser implementation that matches the Node.js API:
+TracePerf provides a browser implementation with the same `track` / `createTrackable` API and options (`silent`, `trackMemory`, `threshold`, `trackingMode`, `enableNestedTracking`):
 
 ```javascript
 import { createTracePerf, BrowserLogger } from 'traceperf/browser';
@@ -187,7 +211,7 @@ You can also use it via script tag:
 
 TracePerf now provides a consistent API across Node.js and browser environments:
 
-- **Unified Tracking API**: The same tracking methods work identically in both environments
+- **Unified Tracking API**: `track()` and `createTrackable()` work the same way in both environments (`registerModule`, `setConfig` and the other configuration helpers are Node.js-only for now)
 - **Consistent Configuration**: Logger and tracker options are synchronized
 - **Memory Tracking**: Both environments support memory usage tracking
 - **Performance Optimization**: Browser-specific optimizations while maintaining API compatibility
@@ -248,7 +272,9 @@ const traceperf = createTracePerf({ enableNestedTracking: true });
 
 async function processData() {
   return await traceperf.track(async () => {
-    // This function call will be automatically tracked as a child
+    // Tracked calls made inside a tracked call are recorded as its children
+    // (on Node.js this also works across `await`; in browsers only for calls
+    // made before the first `await`)
     const data = await fetchData();
     return transformData(data);
   }, { 
@@ -269,6 +295,14 @@ function transformData(data) {
 }
 ```
 
+Calling `processData()` prints a single tree once it finishes:
+
+```
+└─ processData: 12.908 ms 📊 +2.12 KB
+  ├─ fetchData: 12.197 ms 📊 +1.03 KB
+  └─ transformData: 0.075 ms 📊 +0.41 KB
+```
+
 ### Optimizing for Production
 
 ```javascript
@@ -283,6 +317,8 @@ const devTracker = createTracePerf({
 });
 
 // Production environment
+// Note: PERFORMANCE mode never prints; use BALANCED with a threshold and a
+// low sampleRate if you want slow calls reported in production.
 const prodTracker = createTracePerf({
   trackingMode: TrackingMode.PERFORMANCE,
   silent: true, // don't log to console
@@ -360,7 +396,7 @@ const detailedTracker = createTracePerf({
 const { createTracePerf } = require('traceperf');
 const tracker = createTracePerf();
 
-// Only log functions that take more than 50ms
+// Only log calls that take at least 50ms (faster calls print nothing)
 tracker.track(slowFunction, { threshold: 50 });
 
 // Different thresholds for different functions

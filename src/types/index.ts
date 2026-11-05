@@ -13,7 +13,7 @@ export interface ITracePerfConfig {
   trackMemory?: boolean;
   /** Whether to enable nested function tracking */
   enableNestedTracking?: boolean;
-  /** Minimum duration threshold in microseconds */
+  /** Only report calls taking at least this many milliseconds (default 0) */
   threshold?: number;
   /** Sampling rate (0.0-1.0) for reducing overhead */
   sampleRate?: number;
@@ -33,7 +33,7 @@ export interface ITrackOptions {
   trackMemory?: boolean;
   /** Override default nested tracking */
   enableNestedTracking?: boolean;
-  /** Minimum duration threshold in microseconds */
+  /** Only report calls taking at least this many milliseconds (default 0) */
   threshold?: number;
   /** Sampling rate (0.0-1.0) for reducing overhead */
   sampleRate?: number;
