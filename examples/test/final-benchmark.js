@@ -1,355 +1,69 @@
 /**
- * Final Benchmark for TracePerf Implementations
- * 
- * This benchmark compares all three implementations:
- * 1. Original TracePerf
- * 2. Enhanced TracePerf 
- * 3. Optimized Enhanced TracePerf (Final)
- * 
- * The benchmark focuses on high-frequency function calls, which is where
- * the most significant performance differences are observed.
+ * TracePerf benchmark: overhead of each tracking mode
+ *
+ * Measures high-frequency calls of a trivial function, untracked and tracked
+ * in each tracking mode (all silent so console I/O is not measured), plus the
+ * effect of sampling. Also reports heap growth so leaks are visible.
+ *
+ * Run `npm run build` first, then:
+ *   node examples/test/final-benchmark.js
+ *   node --expose-gc examples/test/final-benchmark.js   # steadier heap numbers
  */
 
-// Import all implementations
-const tracePerf = require('../../dist/index.js');
-const { optimizedEnhancedTracePerf: enhancedTracePerf } = require('./traceperf-enhanced-optimized.js');
-const { optimizedEnhancedTracePerf: finalTracePerf, TrackingMode } = require('./traceperf-enhanced-optimized-final.js');
+const { createTracePerf, TrackingMode } = require('../../dist');
 
-// Configure all implementations
-tracePerf.setMode('prod'); // Silent mode
+const ITERATIONS = 100000;
 
-enhancedTracePerf.setConfig({
-  showMemoryUsage: true,
-  enableNestedTracking: true,
-  silent: true // Set to silent for benchmark
-});
-
-finalTracePerf.setConfig({
-  showMemoryUsage: true,
-  enableNestedTracking: true,
-  trackingMode: TrackingMode.BALANCED, // Default mode for fair comparison
-  silent: true // Set to silent for benchmark
-});
-
-// Helper functions
-function formatNumber(num) {
-  return num.toLocaleString();
-}
-
-function formatTime(ns) {
-  return `${(ns / 1000000).toFixed(3)} ms`;
-}
-
-// Simple function for testing
 function add(a, b) {
   return a + b;
 }
 
-// Create trackable versions
-const originalTracked = tracePerf.createTrackable(add, { label: 'add' });
-const enhancedTracked = enhancedTracePerf.createTrackable(add, { label: 'add' });
-const finalTracked = finalTracePerf.createTrackable(add, { label: 'add' });
-const finalTrackedPerf = finalTracePerf.createTrackable(add, { 
-  label: 'add',
-  trackingMode: TrackingMode.PERFORMANCE 
-});
+function gc() {
+  if (global.gc) global.gc();
+}
 
-// Benchmark high-frequency function calls
-async function benchmarkHighFrequency(iterations = 100000) {
-  console.log(`\n==================================================`);
-  console.log(`HIGH-FREQUENCY FUNCTION CALLS (${formatNumber(iterations)} iterations)`);
-  console.log(`==================================================`);
-  
-  // Warm-up
-  for (let i = 0; i < 1000; i++) {
-    add(i, i + 1);
-    originalTracked(i, i + 1);
-    enhancedTracked(i, i + 1);
-    finalTracked(i, i + 1);
-    finalTrackedPerf(i, i + 1);
-  }
-  
-  // Benchmark baseline
-  console.log('Running baseline benchmark...');
-  const baselineStart = process.hrtime.bigint();
-  for (let i = 0; i < iterations; i++) {
-    add(i, i + 1);
-  }
-  const baselineEnd = process.hrtime.bigint();
-  const baselineTime = Number(baselineEnd - baselineStart);
-  
-  // Benchmark original implementation
-  console.log('Running original TracePerf benchmark...');
-  const originalStart = process.hrtime.bigint();
-  for (let i = 0; i < iterations; i++) {
-    tracePerf.track(() => {
-      return add(i, i + 1);
-    }, { label: 'highFrequencyBenchmark', silent: true });
-  }
-  const originalEnd = process.hrtime.bigint();
-  const originalTime = Number(originalEnd - originalStart);
-  
-  // Benchmark enhanced implementation
-  console.log('Running enhanced TracePerf benchmark...');
-  const enhancedStart = process.hrtime.bigint();
-  for (let i = 0; i < iterations; i++) {
-    enhancedTracePerf.track(() => {
-      return add(i, i + 1);
-    }, { label: 'highFrequencyBenchmark', silent: true });
-  }
-  const enhancedEnd = process.hrtime.bigint();
-  const enhancedTime = Number(enhancedEnd - enhancedStart);
-  
-  // Benchmark final implementation (BALANCED mode)
-  console.log('Running final TracePerf benchmark (BALANCED mode)...');
-  const finalStart = process.hrtime.bigint();
-  for (let i = 0; i < iterations; i++) {
-    finalTracePerf.track(() => {
-      return add(i, i + 1);
-    }, { label: 'highFrequencyBenchmark', silent: true });
-  }
-  const finalEnd = process.hrtime.bigint();
-  const finalTime = Number(finalEnd - finalStart);
-  
-  // Benchmark final implementation (PERFORMANCE mode)
-  console.log('Running final TracePerf benchmark (PERFORMANCE mode)...');
-  const finalPerfStart = process.hrtime.bigint();
-  for (let i = 0; i < iterations; i++) {
-    finalTracePerf.track(() => {
-      return add(i, i + 1);
-    }, { 
-      label: 'highFrequencyBenchmark', 
-      silent: true, 
-      trackingMode: TrackingMode.PERFORMANCE 
-    });
-  }
-  const finalPerfEnd = process.hrtime.bigint();
-  const finalPerfTime = Number(finalPerfEnd - finalPerfStart);
-  
-  // Calculate operations per second
-  const baselineOps = Math.floor(iterations / (baselineTime / 1000000000));
-  const originalOps = Math.floor(iterations / (originalTime / 1000000000));
-  const enhancedOps = Math.floor(iterations / (enhancedTime / 1000000000));
-  const finalOps = Math.floor(iterations / (finalTime / 1000000000));
-  const finalPerfOps = Math.floor(iterations / (finalPerfTime / 1000000000));
-  
-  // Calculate overhead percentage compared to baseline
-  const originalOverhead = (originalTime / baselineTime - 1) * 100;
-  const enhancedOverhead = (enhancedTime / baselineTime - 1) * 100;
-  const finalOverhead = (finalTime / baselineTime - 1) * 100;
-  const finalPerfOverhead = (finalPerfTime / baselineTime - 1) * 100;
-  
-  // Display results
-  console.log('\n=== High-Frequency Function Call Results ===\n');
-  console.log(`Baseline: ${formatTime(baselineTime)} (${formatNumber(baselineOps)} ops/sec)`);
-  console.log(`Original TracePerf: ${formatTime(originalTime)} (${formatNumber(originalOps)} ops/sec) - ${originalOverhead.toFixed(2)}% overhead`);
-  console.log(`Enhanced TracePerf: ${formatTime(enhancedTime)} (${formatNumber(enhancedOps)} ops/sec) - ${enhancedOverhead.toFixed(2)}% overhead`);
-  console.log(`Final TracePerf (BALANCED): ${formatTime(finalTime)} (${formatNumber(finalOps)} ops/sec) - ${finalOverhead.toFixed(2)}% overhead`);
-  console.log(`Final TracePerf (PERFORMANCE): ${formatTime(finalPerfTime)} (${formatNumber(finalPerfOps)} ops/sec) - ${finalPerfOverhead.toFixed(2)}% overhead`);
-  
-  // Calculate improvement percentages
-  const enhancedVsOriginal = ((originalTime - enhancedTime) / originalTime) * 100;
-  const finalVsEnhanced = ((enhancedTime - finalTime) / enhancedTime) * 100;
-  const finalPerfVsEnhanced = ((enhancedTime - finalPerfTime) / enhancedTime) * 100;
-  const finalPerfVsOriginal = ((originalTime - finalPerfTime) / originalTime) * 100;
-  
-  console.log('\n=== Performance Improvement ===\n');
-  console.log(`Enhanced vs Original: ${enhancedVsOriginal.toFixed(2)}%`);
-  console.log(`Final (BALANCED) vs Enhanced: ${finalVsEnhanced.toFixed(2)}%`);
-  console.log(`Final (PERFORMANCE) vs Enhanced: ${finalPerfVsEnhanced.toFixed(2)}%`);
-  console.log(`Final (PERFORMANCE) vs Original: ${finalPerfVsOriginal.toFixed(2)}%`);
-  
+function bench(name, fn) {
+  // Warm up
+  for (let i = 0; i < 1000; i++) fn(i, 1);
+  gc();
+  const heapBefore = process.memoryUsage().heapUsed;
+  const start = process.hrtime.bigint();
+  for (let i = 0; i < ITERATIONS; i++) fn(i, 1);
+  const elapsedNs = Number(process.hrtime.bigint() - start);
+  gc();
+  const heapAfter = process.memoryUsage().heapUsed;
   return {
-    baseline: { time: baselineTime, ops: baselineOps },
-    original: { time: originalTime, ops: originalOps, overhead: originalOverhead },
-    enhanced: { time: enhancedTime, ops: enhancedOps, overhead: enhancedOverhead },
-    final: { time: finalTime, ops: finalOps, overhead: finalOverhead },
-    finalPerf: { time: finalPerfTime, ops: finalPerfOps, overhead: finalPerfOverhead },
-    improvements: {
-      enhancedVsOriginal,
-      finalVsEnhanced,
-      finalPerfVsEnhanced,
-      finalPerfVsOriginal
-    }
+    name,
+    totalMs: elapsedNs / 1e6,
+    nsPerCall: elapsedNs / ITERATIONS,
+    heapDeltaKB: (heapAfter - heapBefore) / 1024,
   };
 }
 
-// Benchmark module registration overhead
-async function benchmarkModuleRegistration() {
-  console.log(`\n==================================================`);
-  console.log(`MODULE REGISTRATION OVERHEAD`);
-  console.log(`==================================================`);
-  
-  // Create a module with multiple functions
-  const testModule = {
-    name: 'TestModule',
-    add: (a, b) => a + b,
-    subtract: (a, b) => a - b,
-    multiply: (a, b) => a * b,
-    divide: (a, b) => a / b,
-    power: (a, b) => Math.pow(a, b),
-    runAll(a, b) {
-      console.log(`${this.name}: Running all operations`);
-      const results = {
-        add: this.add(a, b),
-        subtract: this.subtract(a, b),
-        multiply: this.multiply(a, b),
-        divide: this.divide(a, b),
-        power: this.power(a, b)
-      };
-      return results;
-    }
-  };
-  
-  console.log('Registering module with Enhanced TracePerf...');
-  const enhancedStart = process.hrtime.bigint();
-  const enhancedModule = enhancedTracePerf.registerModule(testModule, { modulePrefix: 'test' });
-  const enhancedEnd = process.hrtime.bigint();
-  const enhancedTime = Number(enhancedEnd - enhancedStart);
-  
-  console.log('Registering module with Final TracePerf (BALANCED)...');
-  const finalStart = process.hrtime.bigint();
-  const finalModule = finalTracePerf.registerModule(testModule, { modulePrefix: 'test' });
-  const finalEnd = process.hrtime.bigint();
-  const finalTime = Number(finalEnd - finalStart);
-  
-  console.log('Registering module with Final TracePerf (PERFORMANCE)...');
-  const finalPerfStart = process.hrtime.bigint();
-  const finalPerfModule = finalTracePerf.registerModule(testModule, { 
-    modulePrefix: 'test',
-    trackingMode: TrackingMode.PERFORMANCE
-  });
-  const finalPerfEnd = process.hrtime.bigint();
-  const finalPerfTime = Number(finalPerfEnd - finalPerfStart);
-  
-  // Display results
-  console.log('\n=== Module Registration Results ===\n');
-  console.log(`Enhanced TracePerf: ${formatTime(enhancedTime)}`);
-  console.log(`Final TracePerf (BALANCED): ${formatTime(finalTime)}`);
-  console.log(`Final TracePerf (PERFORMANCE): ${formatTime(finalPerfTime)}`);
-  
-  // Calculate improvement percentages
-  const finalVsEnhanced = ((enhancedTime - finalTime) / enhancedTime) * 100;
-  const finalPerfVsEnhanced = ((enhancedTime - finalPerfTime) / enhancedTime) * 100;
-  
-  console.log('\n=== Registration Improvement ===\n');
-  console.log(`Final (BALANCED) vs Enhanced: ${finalVsEnhanced.toFixed(2)}%`);
-  console.log(`Final (PERFORMANCE) vs Enhanced: ${finalPerfVsEnhanced.toFixed(2)}%`);
-  
-  return {
-    enhanced: { time: enhancedTime },
-    final: { time: finalTime },
-    finalPerf: { time: finalPerfTime },
-    improvements: {
-      finalVsEnhanced,
-      finalPerfVsEnhanced
-    }
-  };
+const results = [bench('untracked', add)];
+
+for (const mode of [TrackingMode.PERFORMANCE, TrackingMode.BALANCED, TrackingMode.DETAILED]) {
+  // enableNestedTracking: false so PERFORMANCE mode may skip wrapping entirely
+  const tracker = createTracePerf({ trackingMode: mode, silent: true, enableNestedTracking: false });
+  results.push(bench(`${mode} (no nesting)`, tracker.createTrackable(add)));
 }
 
-// Benchmark different tracking modes in final implementation
-async function benchmarkTrackingModes(iterations = 10000) {
-  console.log(`\n==================================================`);
-  console.log(`TRACKING MODES COMPARISON (${formatNumber(iterations)} iterations)`);
-  console.log(`==================================================`);
-  
-  // Simple function to track
-  function fibonacci(n) {
-    if (n <= 1) return n;
-    return fibonacci(n - 1) + fibonacci(n - 2);
-  }
-  
-  // Warm-up
-  fibonacci(10);
-  
-  // Baseline
-  console.log('Running baseline benchmark...');
-  const baselineStart = process.hrtime.bigint();
-  for (let i = 0; i < iterations; i++) {
-    fibonacci(10);
-  }
-  const baselineEnd = process.hrtime.bigint();
-  const baselineTime = Number(baselineEnd - baselineStart);
-  
-  // Track function with different modes
-  const results = {};
-  const modes = [
-    TrackingMode.PERFORMANCE,
-    TrackingMode.BALANCED,
-    TrackingMode.DETAILED,
-    TrackingMode.DEBUG
-  ];
-  
-  for (const mode of modes) {
-    console.log(`Running ${mode} mode benchmark...`);
-    const trackedFn = finalTracePerf.createTrackable(fibonacci, { 
-      label: 'fibonacci',
-      trackingMode: mode
-    });
-    
-    const start = process.hrtime.bigint();
-    for (let i = 0; i < iterations; i++) {
-      finalTracePerf.track(() => {
-        return trackedFn(10);
-      }, { label: 'fibonacci', trackingMode: mode, silent: true });
-    }
-    const end = process.hrtime.bigint();
-    const time = Number(end - start);
-    
-    results[mode] = {
-      time,
-      ops: Math.floor(iterations / (time / 1000000000)),
-      overhead: (time / baselineTime - 1) * 100
-    };
-  }
-  
-  // Display results
-  console.log('\n=== Tracking Mode Results ===\n');
-  console.log(`Baseline: ${formatTime(baselineTime)} (${formatNumber(Math.floor(iterations / (baselineTime / 1000000000)))} ops/sec)`);
-  
-  for (const mode of modes) {
-    console.log(`${mode.toUpperCase()}: ${formatTime(results[mode].time)} (${formatNumber(results[mode].ops)} ops/sec) - ${results[mode].overhead.toFixed(2)}% overhead`);
-  }
-  
-  return {
-    baseline: { time: baselineTime, ops: Math.floor(iterations / (baselineTime / 1000000000)) },
-    modes: results
-  };
+for (const mode of [TrackingMode.BALANCED, TrackingMode.DETAILED]) {
+  const tracker = createTracePerf({ trackingMode: mode, silent: true, enableNestedTracking: true });
+  results.push(bench(`${mode} (nesting)`, tracker.createTrackable(add)));
 }
 
-// Run all benchmarks
-async function runAllBenchmarks() {
-  console.log('\n==================================================');
-  console.log('FINAL TRACEPERF PERFORMANCE BENCHMARKS');
-  console.log('==================================================');
-  console.log('\nRunning benchmarks, please wait...');
-  
-  // Run high-frequency benchmark
-  const highFrequencyResults = await benchmarkHighFrequency();
-  
-  // Run module registration benchmark
-  const moduleResults = await benchmarkModuleRegistration();
-  
-  // Run tracking modes benchmark
-  const modesResults = await benchmarkTrackingModes();
-  
-  console.log('\n==================================================');
-  console.log('ALL BENCHMARKS COMPLETED');
-  console.log('==================================================');
-  
-  // Overall summary
-  console.log('\n=== SUMMARY ===\n');
-  console.log(`High-Frequency Performance Improvement (PERFORMANCE mode vs Original): ${highFrequencyResults.improvements.finalPerfVsOriginal.toFixed(2)}%`);
-  console.log(`Module Registration Improvement (PERFORMANCE mode vs Enhanced): ${moduleResults.improvements.finalPerfVsEnhanced.toFixed(2)}%`);
-  console.log(`PERFORMANCE Mode Overhead: ${modesResults.modes.performance.overhead.toFixed(2)}%`);
-  console.log(`DEBUG Mode Overhead: ${modesResults.modes.debug.overhead.toFixed(2)}%`);
-  
-  return {
-    highFrequency: highFrequencyResults,
-    moduleRegistration: moduleResults,
-    trackingModes: modesResults
-  };
+for (const sampleRate of [0.1, 0.01]) {
+  const tracker = createTracePerf({ trackingMode: TrackingMode.BALANCED, silent: true, sampleRate });
+  results.push(bench(`balanced, sampleRate ${sampleRate}`, tracker.createTrackable(add)));
 }
 
-// Run the benchmarks
-runAllBenchmarks(); 
+console.log(`TracePerf benchmark - ${ITERATIONS.toLocaleString()} calls each${global.gc ? '' : ' (run with --expose-gc for steadier heap numbers)'}\n`);
+console.table(
+  results.map(r => ({
+    mode: r.name,
+    'total ms': r.totalMs.toFixed(1),
+    'ns/call': r.nsPerCall.toFixed(0),
+    'heap Δ KB': r.heapDeltaKB.toFixed(0),
+  }))
+);

@@ -1,37 +1,70 @@
 {
   "name": "traceperf",
   "version": "0.2.1",
-  "description": "High-performance function execution tracking and monitoring for Node.js",
+  "description": "See where the time goes: call trees in development, cheap per-function stats in production, export to Perfetto and OpenTelemetry. Node.js and browsers.",
+  "type": "commonjs",
   "main": "dist/index.js",
   "module": "dist/esm/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "traceperf": "dist/cli.js"
+  },
   "browser": "dist/browser.js",
+  "typesVersions": {
+    "*": {
+      "browser": [
+        "dist/browser.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
-      "require": "./dist/index.js",
-      "import": "./dist/esm/index.js",
-      "types": "./dist/index.d.ts"
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
     },
     "./browser": {
-      "require": "./dist/browser.js",
-      "import": "./dist/esm/browser.js",
-      "types": "./dist/browser.d.ts"
-    }
+      "import": {
+        "types": "./dist/esm/browser.d.ts",
+        "default": "./dist/esm/browser.js"
+      },
+      "require": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc",
-    "build:esm": "tsc -p tsconfig.esm.json",
-    "build:browser": "tsc -p tsconfig.browser.json",
+    "build:esm": "tsc -p tsconfig.esm.json && node scripts/postbuild-esm.js",
+    "build:browser": "tsc -p tsconfig.browser.json && node scripts/build-browser-global.js",
     "build:all": "npm run build && npm run build:esm && npm run build:browser",
     "test": "jest",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src --ext .ts --max-warnings 0",
     "format": "prettier --write \"src/**/*.ts\"",
-    "prepare": "husky install",
+    "prepare": "husky || true",
     "prepublishOnly": "npm run build:all",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "verify:package": "node scripts/verify-package.js",
+    "lint:package": "publint --strict && attw --pack .",
+    "test:browser": "playwright test",
+    "verify:docs": "node scripts/check-docs.js",
+    "verify": "npm run lint:package && npm run verify:package && npm run verify:docs",
+    "bench": "node scripts/bench.js",
+    "bench:check": "node scripts/bench.js --check",
+    "typecheck": "tsc --noEmit -p tsconfig.eslint.json",
+    "test:runtimes": "bun test/runtimes/smoke.mjs && deno run --allow-read --allow-env --allow-sys test/runtimes/smoke.mjs && node test/runtimes/edge.test.js && test/runtimes/workerd.sh",
+    "bench:compare": "node scripts/compare.js",
+    "docs:api": "typedoc"
   },
   "keywords": [
     "performance",
@@ -44,7 +77,15 @@
     "bottleneck-detection",
     "sampling",
     "debug",
-    "optimization"
+    "optimization",
+    "opentelemetry",
+    "perfetto",
+    "tracing",
+    "express",
+    "fastify",
+    "hono",
+    "decorators",
+    "async-hooks"
   ],
   "author": "Shubh Wadekar",
   "license": "MIT",
@@ -60,20 +101,43 @@
   },
   "homepage": "https://github.com/thelastbackspace/traceperf#readme",
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@aws-sdk/client-s3": "^3.1153.0",
+    "@nestjs/common": "^12.2.0",
+    "@nestjs/core": "^12.2.0",
+    "@nestjs/platform-express": "^12.2.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/context-async-hooks": "^2.12.0",
+    "@opentelemetry/sdk-trace-base": "^2.12.0",
+    "@playwright/test": "^1.64.1",
+    "@types/express": "^5.0.6",
     "@types/jest": "^29.5.14",
+    "@types/koa": "^2.15.2",
     "@types/node": "^22.13.10",
-    "@types/uuid": "^10.0.0",
+    "@types/pg": "^8.23.1",
     "@typescript-eslint/eslint-plugin": "^8.26.1",
     "@typescript-eslint/parser": "^8.26.1",
+    "edge-runtime": "^4.0.1",
+    "esbuild": "^0.28.2",
     "eslint": "^8.56.0",
     "eslint-config-prettier": "^10.1.1",
+    "express": "^5.3.0",
+    "fastify": "^5.12.7",
+    "hono": "^4.13.13",
     "husky": "^9.1.7",
+    "ioredis": "^6.0.0",
     "jest": "^29.7.0",
+    "koa": "^3.2.1",
+    "mongodb": "^7.7.0",
+    "mysql2": "^3.24.6",
+    "pg": "^8.23.1",
     "prettier": "^3.5.3",
+    "publint": "^0.3.25",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
     "ts-jest": "^29.2.6",
+    "typedoc": "^0.28.20",
     "typescript": "^5.8.2"
   },
-  "dependencies": {
-    "uuid": "^11.1.0"
-  }
+  "sideEffects": false
 }

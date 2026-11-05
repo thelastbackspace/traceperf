@@ -132,3 +132,11 @@ simple-example.js
 proxy-tracking-example.js
 wrapper-tracking-example.js
 .cursor/rules/*
+# verification scratch output
+.docs-check-*/
+test-results/
+playwright-report/
+traceperf-example-trace.json
+docs/api/
+test/runtimes/traceperf.bundle.mjs
+test/runtimes/workerd.log

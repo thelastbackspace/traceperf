@@ -34,7 +34,12 @@ We welcome feature suggestions! Please create an issue on GitHub with:
 1. Fork the repository
 2. Create a new branch (`git checkout -b feature/your-feature-name`)
 3. Make your changes
-4. Run tests and linting (`npm test && npm run lint`)
+4. Run the checks:
+   - `npm run build:all && npm test && npm run lint` - unit tests and lint (warnings fail)
+   - `npm run verify` - publint/attw, the packed tarball in fresh CJS/ESM/TypeScript/bundler projects, and every README/docs example (with output comparison)
+   - `npm run test:browser` - Playwright in Chromium, Firefox and WebKit (`npx playwright install` once)
+   - `npm run bench:check` - overhead and bundle-size budgets
+   If you change behaviour that the README shows, update the example and its output block; `verify:docs` will tell you if they drift.
 5. Commit your changes with a descriptive commit message
 6. Push to your branch (`git push origin feature/your-feature-name`)
 7. Open a pull request

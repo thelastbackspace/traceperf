@@ -3,41 +3,159 @@ name: CI
 on:
   push:
     branches: [ main ]
+    # Pushing a tag like v1.2.3 runs every job and then publishes to npm
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
 jobs:
+  # Lint, unit tests, package checks and docs on the current LTS.
   build:
     runs-on: ubuntu-latest
+    services:
+      # Real databases for the driver instrumentation tests
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: traceperf
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U traceperf" --health-interval 2s --health-timeout 5s --health-retries 20
+      mongo:
+        image: mongo:7.0
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TRACEPERF_PG_URL: postgres://traceperf@127.0.0.1:5432/traceperf
+      TRACEPERF_MONGO_URL: mongodb://127.0.0.1:27017
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+    - run: npm ci
+    - run: npm run build:all
+    - run: npm run lint
+    - name: Type-check sources and tests
+      run: npm run typecheck
+    - run: npm test
+    - name: Package lint (publint + are-the-types-wrong)
+      run: npm run lint:package
+    - name: Install the tarball into fresh CJS/ESM/TypeScript/bundler projects
+      run: npm run verify:package
+    - name: Run every documented example and compare its output
+      run: npm run verify:docs
+    - name: Overhead and bundle-size budgets
+      run: npm run bench:check
+    - name: API reference builds without warnings
+      run: npm run docs:api
+    - uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist
 
+  # Unit tests on every Node version the dev tooling supports.
+  test:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [14.x, 16.x, 18.x, 20.x]
-
+        node-version: [18.x, 20.x, 22.x, 24.x]
     steps:
-    - uses: actions/checkout@v3
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
     - run: npm ci
-    - run: npm run build
-    - run: npm run lint
+    - run: npm run build:all
     - run: npm test
 
-  publish-npm:
+  # The published package on every Node version in "engines" (no dev tooling).
+  runtime:
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [14.x, 16.x, 18.x, 20.x, 22.x, 24.x]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+    - run: node scripts/verify-package.js --runtime
+
+  # Browser builds in real Chromium, Firefox and WebKit.
+  browser:
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+    - run: npm ci
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist
+    - run: npx playwright install --with-deps chromium firefox webkit
+    - run: npm run test:browser
+
+  # Bun and Deno run the ESM build (nesting, stats, exporters, browser entry).
+  other-runtimes:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist
+    - uses: oven-sh/setup-bun@v2
+    - run: bun test/runtimes/smoke.mjs
+    - uses: denoland/setup-deno@v2
+      with:
+        deno-version: v2.x
+    - run: deno run --allow-read --allow-env --allow-sys test/runtimes/smoke.mjs
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+        cache: 'npm'
+    - run: npm ci
+    - name: Vercel Edge runtime (edge-runtime VM)
+      run: node test/runtimes/edge.test.js
+    - name: Cloudflare Workers (workerd)
+      run: test/runtimes/workerd.sh
+
+  publish-npm:
+    needs: [build, test, runtime, browser, other-runtimes]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '18.x'
+          node-version: '22.x'
           registry-url: 'https://registry.npmjs.org/'
+      - name: Tag must match package.json version
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json $version"; exit 1
+          fi
       - run: npm ci
       - run: npm run build:all
-      - run: npm publish
+      - run: npm publish --provenance --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} 
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,42 @@
+name: Bug report
+description: traceperf does something wrong or crashes
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest code that shows the problem, ideally runnable with `node repro.js`.
+      render: javascript
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Actual output / error
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: traceperf version
+      placeholder: "1.1.0"
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime and version
+      placeholder: "Node 22.11 / Bun 1.3 / Chrome 130 ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: How do you load traceperf?
+      options: [require (CommonJS), import (ESM), TypeScript, bundler (which one in the description), script tag]

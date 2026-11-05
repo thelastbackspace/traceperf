@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="styles.css">
     <!-- Add Open Graph meta tags for better social sharing -->
     <meta property="og:title" content="TracePerf">
-    <meta property="og:description" content="High-performance function execution tracking and monitoring for Node.js applications.">
+    <meta property="og:description" content="See where the time goes: call trees in development, cheap per-function stats in production, export to Perfetto and OpenTelemetry. Node.js and browsers.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://traceperf.com">
     <!-- Add favicon -->
@@ -17,7 +17,7 @@
     <header>
         <div class="container">
             <h1>TracePerf</h1>
-            <p class="tagline">High-performance function execution tracking and monitoring for Node.js</p>
+            <p class="tagline">See where the time goes: call trees in development, cheap stats in production, export to Perfetto and OpenTelemetry</p>
             <div class="buttons">
                 <a href="https://github.com/thelastbackspace/traceperf" class="button primary">GitHub</a>
                 <a href="#getting-started" class="button secondary">Get Started</a>
@@ -127,7 +127,7 @@ const result = tracker.track(() => {
 }, { label: 'memoryIntensiveOperation' });</code></pre>
 
             <h3>Output:</h3>
-            <pre class="output"><code>└─ memoryIntensiveOperation: 25.22ms 📊 11.29MB</code></pre>
+            <pre class="output"><code>└─ memoryIntensiveOperation: 25.005 ms 📊 +15335.69 KB</code></pre>
         </section>
 
         <section id="nested-tracking">
@@ -135,9 +135,9 @@ const result = tracker.track(() => {
             <pre><code>const { createTracePerf } = require('traceperf');
 const traceperf = createTracePerf({ enableNestedTracking: true });
 
-// Define some functions
+// Define some functions (call the *tracked* versions so they nest)
 function processData(data) {
-  return transformData(data);
+  return trackedTransformData(data);
 }
 
 function transformData(data) {
@@ -160,14 +160,14 @@ traceperf.track(() => {
 }, { label: 'mainOperation' });</code></pre>
 
             <h3>Output:</h3>
-            <pre class="output"><code>└─ mainOperation: 0.58ms
-   └─ processData: 0.33ms
-      └─ transformData: 0.12ms</code></pre>
+            <pre class="output"><code>└─ mainOperation: 0.580 ms 📊 +3.12 KB
+  └─ processData: 0.330 ms 📊 +1.40 KB
+    └─ transformData: 0.120 ms 📊 +0.75 KB</code></pre>
         </section>
 
         <section id="browser-support">
             <h2>Browser Support</h2>
-            <pre><code>&lt;script src="dist/traceperf.browser.js"&gt;&lt;/script&gt;
+            <pre><code>&lt;script src="https://unpkg.com/traceperf/dist/traceperf.browser.min.js"&gt;&lt;/script&gt;
 &lt;script&gt;
   const { createTracePerf, BrowserLogger } = TracePerf;
   

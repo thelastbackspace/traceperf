@@ -5,6 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - Unreleased
+
+### Added
+- **Database and cloud clients:** `instrumentPg`, `instrumentMysql2`, `instrumentMongo` (also works for Mongoose via `mongoose.mongo`), `instrumentRedis` (ioredis) and `instrumentAwsClient` (AWS SDK v3). Labels look like `pg SELECT users` or `aws S3.GetObject`. `sqlLabel()` builds low-cardinality SQL labels.
+- **Frameworks:** `koaMiddleware` and `nestInterceptor` (no dependency on Nest or rxjs).
+- `performanceTimeline()`: tracked calls appear on a custom track in the Chrome DevTools Performance panel (User Timing everywhere else).
+- **`traceperf report --html`:** a self-contained flame-chart report.
+- **`traceperf compare before after [--fail]`:** label-by-label regression check for CI.
+- **`traceperf watch calls.jsonl`:** a live, top-style terminal view.
+- `onSlow(threshold | { label: ms, '*': ms }, listener)`: slow-call alerts.
+- `prometheusExporter()`: a duration histogram and an error counter per label, with an HTTP handler.
+- `profileAllocations(fn)`: real allocated bytes and top allocation sites via V8's sampling heap profiler. Includes collected objects on Node 20+.
+- **Edge runtimes:** `AsyncLocalStorage` is detected as a global, and a new `asyncLocalStorage` option accepts the class explicitly. Verified on Cloudflare Workers (workerd) and Vercel Edge (edge-runtime).
+- `traceperf/browser` also exports `performanceTimeline`, `instrumentFetch`, the exporters and `formatTree`.
+
+### Development
+- CI runs Postgres and MongoDB service containers for the driver tests, plus Cloudflare workerd and edge-runtime jobs.
+
+## [1.1.0] - Unreleased
+
+### Added
+- **OpenTelemetry live mode:** `openTelemetryExporter(api, { live: true })` opens each span when the call starts and keeps it active while the call runs (across `await`). Spans from other instrumentation (database drivers, HTTP clients) then nest under traceperf's spans.
+- `wrap(execution, run)` plugin hook, to run tracked code inside a context. A `wrap` that throws is reported once and skipped.
+- **Auto-instrumentation** (each idempotent, each returns an uninstall function):
+  - `instrumentFetch(tp)`: every `fetch()` call;
+  - `instrumentHttp(tp)`: Node `http`/`https` `request` and `get`, which covers axios and got;
+  - `instrumentMethods(tp, target, methods?, { prefix, labelFor })`: any client, e.g. `pg.Client.prototype.query`, with per-call labels;
+  - `prismaExtension(tp)`: Prisma client extension.
+- **`traceperf` CLI:** `npx traceperf report <trace.json | calls.jsonl> [--top N] [--sort ...] [--json]` prints per-label statistics and the slowest calls with their call path.
+- **Bun and Deno** support, verified by a runtime smoke test in CI (nesting across `await` works on both).
+- `docs/benchmarks.md`: overhead compared with `performance.now()`, `timerify` and OpenTelemetry spans (`npm run bench:compare`).
+- `examples/playground`: an Express app with a deliberate N+1 query problem, with a StackBlitz link.
+- Exported `TracedDecorator` and `Uninstall` types.
+
+### Fixed
+- The real `@opentelemetry/api` didn't type-check against `openTelemetryExporter` (also fixed in 0.3.0).
+
+### Development
+- CI publishes on `v*` tags with npm provenance, after every job passes, and checks that the tag matches `package.json` (see RELEASING.md).
+- CI type-checks explicitly (`npm run typecheck`) and builds the TypeDoc API reference with warnings as errors (`npm run docs:api`).
+- Added issue and PR templates, plus a public ROADMAP.md.
+
+## [1.0.0] - Unreleased
+
+Breaking release that removes the legacy logging API. See [MIGRATION.md](MIGRATION.md). The tracking API is unchanged from 0.3.
+
+### Removed
+- The pre-0.2 logging layer, undocumented since 0.2.0: `Logger`, `ConfigManager`, the CLI/JSON/ASCII formatters, the old `ExecutionTracker`/`PerformanceMonitor` trackers, the color/timing/stack/string utilities, `DEFAULT_CONFIG`, `LOG_LEVEL_PRIORITY`, `MODE_MIN_LEVELS`, `COLORS`, `LEVEL_COLORS`, `LEVEL_ICONS`, `BOX_CHARS`, `PERFORMANCE_ICONS`, and the interfaces `ILogger`, `ILoggerConfig`, `IFormatter`, `ITransport`, `LogMeta`, `IExecutionTracker`, `IPerformanceMonitor`, `ITrackOptions`.
+- The standalone `BrowserExecutionTracker` and `BrowserPerformanceMonitor` classes from `traceperf/browser`. Use `createTracePerf()` from `traceperf/browser` instead; `BrowserLogger` is unchanged.
+
+### Changed
+- `IBrowserTracePerfConfig` is `TracePerfConfig` plus `mode`, `performanceThreshold` and `logger`. It no longer accepts the old logger fields, which had no effect on tracking.
+- `ITracePerfConfig` and `PerformanceMonitorOptions` are deprecated aliases of `TracePerfConfig`.
+- The browser bundle is smaller (8.0 KB gzipped, down from 9.3 KB).
+- `architecture.md` describes the current design.
+
+## [0.3.0] - Unreleased
+
+### Added
+- **Results API:** `onComplete(listener)` and `use(plugin)` (`onStart`/`onComplete` hooks) receive every finished call tree as an `ExecutionRecord` (ms: duration, self time, sync time, heap delta, error, args, children). A plugin that throws is reported once and never breaks the tracked code. A `reporter` option replaces console output, and `formatTree()` renders the default output.
+- **Statistics:** `getStats()`, `printStats()`, `formatStats()`, `resetStats()`. Per label: count, errors, total, mean, min, max, p50/p95/p99 and mean self time. Memory is bounded (a 512-sample reservoir per label; at most 1,000 labels, the rest folded into `(other)`). Configure with `stats: { reservoirSize, maxLabels }`, or turn off with `stats: false`.
+- **Exporters:**
+  - `startTrace()` / `toChromeTrace()`: Perfetto / `chrome://tracing` / DevTools traces. Concurrent async work is placed on separate tracks.
+  - `openTelemetryExporter(api)`: spans with real times, parent links and error status, parented to the active OpenTelemetry context. No dependency on `@opentelemetry/api`.
+  - `jsonLinesExporter()`.
+- **Self and sync time:** self time uses the union of child intervals, so concurrent children aren't double-counted. Async calls report the synchronous part that blocked the event loop. `DETAILED` output shows both and flags calls whose sync part reaches `blockingThreshold` (default 50 ms).
+- `monitorEventLoop()`: event-loop delay percentiles (Node.js).
+- **Spans:** `start(label)` with `run()`, `setLabel()` and `end()` for work that isn't a single function call.
+- `@traced()` method decorator, for both TypeScript 5 standard decorators and legacy `experimentalDecorators`. There is also a `traced` export bound to the default instance.
+- `trackObject(obj)`: a proxy that tracks methods, including prototype methods, while keeping state (even `#private` fields) on the original object.
+- **Framework integrations:** `expressMiddleware`, `fastifyPlugin`, `honoMiddleware` and `withTracing` (for Next.js / fetch-style route handlers). Each gives one tree per request, labelled by route pattern.
+- `enabled` option plus `enable()`, `disable()` and `isEnabled()`. When disabled, tracked functions are plain pass-through calls (~40 ns).
+- `getTrackingMode()`.
+- `dist/traceperf.browser.min.js`: the minified script-tag build (~9 KB gzipped).
+- `typesVersions`, so `traceperf/browser` has types under `moduleResolution: "node"`.
+
+### Changed
+- The browser entry now runs on the same core as Node.js (`BrowserLogger` extends `OptimizedPerformanceMonitor`), so nesting, thresholds, sampling, statistics, hooks, exporters, `registerModule` and `setConfig` behave identically. The browser output format is unchanged, but browser calls in `PERFORMANCE` mode no longer print (as in Node.js). An explicit `threshold: 0` no longer marks every browser call `[SLOW]`.
+- Options are strictly typed (`TrackOptions`, `TrackCallOptions`, `ModuleTrackOptions`, `TracePerfConfig`), and `trackingMode` only accepts the four mode names. Code that passed misspelled or unknown options now fails to type-check. Runtime behaviour is unchanged.
+- In `PERFORMANCE` mode, calls now feed statistics and hooks; console output stays off.
+- A negative heap delta is printed with `(gc)`.
+- Per-call overhead is roughly halved. `track(fn)` no longer builds a wrapper per call: a tracked call without memory sampling now costs ~0.8 µs (was ~1.6 µs).
+- No runtime dependencies (`uuid` removed).
+
+### Fixed
+- `require('traceperf')` threw a `SyntaxError` on Node.js 14/15 (the `uuid@11` dependency uses `??=`), despite `engines: >=14`.
+
+### Development
+- CI installs the packed tarball into fresh CJS, ESM, TypeScript (node10/nodenext/bundler) and esbuild projects (`npm run verify:package`), on Node 14–24 for the runtime checks.
+- CI runs every README/docs example and compares its output (`npm run verify:docs`).
+- CI runs publint and are-the-types-wrong (`npm run lint:package`), plus Playwright tests in Chromium, Firefox and WebKit (`npm run test:browser`).
+- CI enforces overhead and bundle-size budgets (`npm run bench:check`), and lint fails on warnings.
+
+## [0.2.2] - Unreleased
+
+### Fixed
+- `import 'traceperf'` (ESM) failed with `ERR_MODULE_NOT_FOUND`. The ESM build is now real ESM (explicit `.js` extensions, `"type": "module"` scope) and no longer contains a `module.exports` shim that bundlers reject.
+- TypeScript users on `moduleResolution: node16/nodenext` saw the default export as the whole module (`tp.track` did not type-check). The `exports` map now lists `types` first, with separate typings for `import` and `require`.
+- `require('traceperf')` was missing most named exports declared in the type definitions (`getTimestamp`, `getMemoryUsage`, `OptimizedExecutionTracker`, `Logger`, ...).
+- The documented `<script>` build `dist/traceperf.browser.js` (global `TracePerf`) did not exist. It is now built.
+- `threshold` (instance or per call) did nothing: every call was printed. Calls shorter than their threshold (in ms) are now not reported. `threshold: 0` was also silently replaced by 100.
+- Per-call `silent`, `trackMemory` and `trackingMode` options were ignored, including `registerModule(mod, { silent: true })`.
+- `setSampleRate()` and `setConfig()` did not affect functions created earlier with `createTrackable()`/`registerModule()`.
+- Nested tracked calls were never linked to their caller: each one printed separately, children before parents. Nested calls now form one tree, printed once when the outermost call finishes. On Node.js this also works across `await`.
+- Tree output drew grandchildren as if they hung off the root; `│` connectors are now drawn.
+- Memory leak: every finished execution and its return value were kept forever. Finished trees are now released.
+- Tracked functions lost the caller's `this` (methods tracked via `createTrackable`/`registerModule` saw the internal tracker as `this`).
+- Returning a non-promise thenable crashed with `Cannot read properties of undefined (reading 'catch')`; such values are now returned untouched.
+- `captureArgs: true` threw on null-prototype objects. Arguments are now rendered safely and shown in the output, e.g. `getUser(123, {"cache":true})` (issue #1).
+- Memory tracking added ~50µs per call by calling `process.memoryUsage()` twice; it now reads the V8 heap directly (~4.5µs per tracked call).
+- Browser: async functions were timed only until they returned a promise; every `track()` reprinted the whole history (which also grew forever); nested `createTrackable` children printed before their parent finished; the documented `silent`, `trackMemory`, `threshold` and `logger` options were ignored and rejected by TypeScript; in SSR/workers each call emitted a `console.warn`.
+- Example scripts in `examples/test/` loaded files that no longer exist, and the nested example in `examples/optimized-tracking-example.js` did not nest.
+- `npm run lint` failed with 7 errors.
+
+### Changed
+- The default `threshold` is now 0 (report every call). The previous default of 100 was never applied, so output is unchanged for users who did not set a threshold.
+
 ## [0.2.0] - 2024-03-18
 
 ### Added
