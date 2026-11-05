@@ -136,3 +136,4 @@ wrapper-tracking-example.js
 .docs-check-*/
 test-results/
 playwright-report/
+traceperf-example-trace.json

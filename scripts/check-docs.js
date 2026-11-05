@@ -9,7 +9,8 @@
  *  - ```javascript / ```js / ```html blocks that mention traceperf are run.
  *  - A plain ``` block directly after a runnable block (optionally with only
  *    a short "Output"-style sentence in between) is its expected output.
- *    Numbers are ignored when comparing; every expected line must appear in order.
+ *    Numbers are ignored when comparing; every expected line must start an
+ *    actual output line, in order.
  *  - Put <!-- docs:skip --> on the line before a block that is illustrative only.
  *  - In HTML, <pre><code> blocks are run and a following
  *    <pre class="output"><code> block is the expected output.
@@ -100,14 +101,28 @@ vm.runInContext('(async () => {' + ${JSON.stringify(inline)} + '\\n})().catch(e 
   };
 }
 
-const normalize = line => line.replace(/[+-]?\d+(\.\d+)?/g, '#').replace(/\s+$/, '');
+// Ignore numbers, column padding and the length of dash rules; keep leading
+// indentation, which carries the tree structure.
+const normalize = line => line
+  .replace(/[+-]?\d+(\.\d+)?/g, '#')
+  .replace(/-{2,}/g, '--')
+  .replace(/(\S)\s+/g, '$1 ')
+  .replace(/\s+$/, '');
 
 function outputMatches(actual, expected) {
   const want = expected.split('\n').map(normalize).filter(Boolean);
   const got = actual.split('\n').map(normalize);
   let pos = 0;
+  // Each expected line must start an actual line, in order (so a trailing
+  // annotation such as "(gc)" on a heap delta does not break the match)
   for (const line of want) {
-    const found = got.indexOf(line, pos);
+    let found = -1;
+    for (let i = pos; i < got.length; i++) {
+      if (got[i].startsWith(line)) {
+        found = i;
+        break;
+      }
+    }
     if (found === -1) return `expected line not found: ${JSON.stringify(line)}`;
     pos = found + 1;
   }

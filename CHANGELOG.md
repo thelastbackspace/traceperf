@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - Unreleased
+
+### Added
+- **Results API:** `onComplete(listener)` and `use(plugin)` (`onStart`/`onComplete` hooks) receive every finished call tree as an `ExecutionRecord` (ms: duration, self time, sync time, heap delta, error, args, children). A plugin that throws is reported once and never breaks the tracked code. A `reporter` option replaces console output, and `formatTree()` renders the default output.
+- **Statistics:** `getStats()`, `printStats()`, `formatStats()`, `resetStats()`. Per label: count, errors, total, mean, min, max, p50/p95/p99 and mean self time. Memory is bounded (a 512-sample reservoir per label; at most 1,000 labels, the rest folded into `(other)`). Configure with `stats: { reservoirSize, maxLabels }`, or turn off with `stats: false`.
+- **Exporters:**
+  - `startTrace()` / `toChromeTrace()`: Perfetto / `chrome://tracing` / DevTools traces. Concurrent async work is placed on separate tracks.
+  - `openTelemetryExporter(api)`: spans with real times, parent links and error status, parented to the active OpenTelemetry context. No dependency on `@opentelemetry/api`.
+  - `jsonLinesExporter()`.
+- **Self and sync time:** self time uses the union of child intervals, so concurrent children aren't double-counted. Async calls report the synchronous part that blocked the event loop. `DETAILED` output shows both and flags calls whose sync part reaches `blockingThreshold` (default 50 ms).
+- `monitorEventLoop()`: event-loop delay percentiles (Node.js).
+- **Spans:** `start(label)` with `run()`, `setLabel()` and `end()` for work that isn't a single function call.
+- `@traced()` method decorator, for both TypeScript 5 standard decorators and legacy `experimentalDecorators`. There is also a `traced` export bound to the default instance.
+- `trackObject(obj)`: a proxy that tracks methods, including prototype methods, while keeping state (even `#private` fields) on the original object.
+- **Framework integrations:** `expressMiddleware`, `fastifyPlugin`, `honoMiddleware` and `withTracing` (for Next.js / fetch-style route handlers). Each gives one tree per request, labelled by route pattern.
+- `enabled` option plus `enable()`, `disable()` and `isEnabled()`. When disabled, tracked functions are plain pass-through calls (~40 ns).
+- `getTrackingMode()`.
+- `dist/traceperf.browser.min.js`: the minified script-tag build (~9 KB gzipped).
+- `typesVersions`, so `traceperf/browser` has types under `moduleResolution: "node"`.
+
+### Changed
+- The browser entry now runs on the same core as Node.js (`BrowserLogger` extends `OptimizedPerformanceMonitor`), so nesting, thresholds, sampling, statistics, hooks, exporters, `registerModule` and `setConfig` behave identically. The browser output format is unchanged, but browser calls in `PERFORMANCE` mode no longer print (as in Node.js). An explicit `threshold: 0` no longer marks every browser call `[SLOW]`.
+- Options are strictly typed (`TrackOptions`, `TrackCallOptions`, `ModuleTrackOptions`, `TracePerfConfig`), and `trackingMode` only accepts the four mode names. Code that passed misspelled or unknown options now fails to type-check. Runtime behaviour is unchanged.
+- In `PERFORMANCE` mode, calls now feed statistics and hooks; console output stays off.
+- A negative heap delta is printed with `(gc)`.
+- Per-call overhead is roughly halved. `track(fn)` no longer builds a wrapper per call: a tracked call without memory sampling now costs ~0.8 µs (was ~1.6 µs).
+- No runtime dependencies (`uuid` removed).
+
+### Fixed
+- `require('traceperf')` threw a `SyntaxError` on Node.js 14/15 (the `uuid@11` dependency uses `??=`), despite `engines: >=14`.
+
+### Development
+- CI installs the packed tarball into fresh CJS, ESM, TypeScript (node10/nodenext/bundler) and esbuild projects (`npm run verify:package`), on Node 14–24 for the runtime checks.
+- CI runs every README/docs example and compares its output (`npm run verify:docs`).
+- CI runs publint and are-the-types-wrong (`npm run lint:package`), plus Playwright tests in Chromium, Firefox and WebKit (`npm run test:browser`).
+- CI enforces overhead and bundle-size budgets (`npm run bench:check`), and lint fails on warnings.
+
 ## [0.2.2] - Unreleased
 
 ### Fixed

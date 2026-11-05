@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="styles.css">
     <!-- Add Open Graph meta tags for better social sharing -->
     <meta property="og:title" content="TracePerf">
-    <meta property="og:description" content="High-performance function execution tracking and monitoring for Node.js applications.">
+    <meta property="og:description" content="See where the time goes: call trees in development, cheap per-function stats in production, export to Perfetto and OpenTelemetry. Node.js and browsers.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://traceperf.com">
     <!-- Add favicon -->
@@ -17,7 +17,7 @@
     <header>
         <div class="container">
             <h1>TracePerf</h1>
-            <p class="tagline">High-performance function execution tracking and monitoring for Node.js</p>
+            <p class="tagline">See where the time goes: call trees in development, cheap stats in production, export to Perfetto and OpenTelemetry</p>
             <div class="buttons">
                 <a href="https://github.com/thelastbackspace/traceperf" class="button primary">GitHub</a>
                 <a href="#getting-started" class="button secondary">Get Started</a>
@@ -167,7 +167,7 @@ traceperf.track(() => {
 
         <section id="browser-support">
             <h2>Browser Support</h2>
-            <pre><code>&lt;script src="dist/traceperf.browser.js"&gt;&lt;/script&gt;
+            <pre><code>&lt;script src="https://unpkg.com/traceperf/dist/traceperf.browser.min.js"&gt;&lt;/script&gt;
 &lt;script&gt;
   const { createTracePerf, BrowserLogger } = TracePerf;
   
