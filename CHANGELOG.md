@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - Unreleased
+
+Breaking release that removes the legacy logging API. See [MIGRATION.md](MIGRATION.md). The tracking API is unchanged from 0.3.
+
+### Removed
+- The pre-0.2 logging layer, undocumented since 0.2.0: `Logger`, `ConfigManager`, the CLI/JSON/ASCII formatters, the old `ExecutionTracker`/`PerformanceMonitor` trackers, the color/timing/stack/string utilities, `DEFAULT_CONFIG`, `LOG_LEVEL_PRIORITY`, `MODE_MIN_LEVELS`, `COLORS`, `LEVEL_COLORS`, `LEVEL_ICONS`, `BOX_CHARS`, `PERFORMANCE_ICONS`, and the interfaces `ILogger`, `ILoggerConfig`, `IFormatter`, `ITransport`, `LogMeta`, `IExecutionTracker`, `IPerformanceMonitor`, `ITrackOptions`.
+- The standalone `BrowserExecutionTracker` and `BrowserPerformanceMonitor` classes from `traceperf/browser`. Use `createTracePerf()` from `traceperf/browser` instead; `BrowserLogger` is unchanged.
+
+### Changed
+- `IBrowserTracePerfConfig` is `TracePerfConfig` plus `mode`, `performanceThreshold` and `logger`. It no longer accepts the old logger fields, which had no effect on tracking.
+- `ITracePerfConfig` and `PerformanceMonitorOptions` are deprecated aliases of `TracePerfConfig`.
+- The browser bundle is smaller (8.0 KB gzipped, down from 9.3 KB).
+- `architecture.md` describes the current design.
+
 ## [0.3.0] - Unreleased
 
 ### Added

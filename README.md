@@ -11,6 +11,8 @@
 - **Gets data out.** Chrome/Perfetto traces, OpenTelemetry spans, JSON lines, or your own `onComplete` hook.
 - **Fits your stack.** Express, Fastify, Hono, Next.js route handlers, decorators, CommonJS, ESM, TypeScript, browsers, Node.js 14+. There are no runtime dependencies.
 
+> Upgrading from 0.x? The tracking API is unchanged; only the old undocumented logging classes were removed. See [MIGRATION.md](MIGRATION.md).
+
 ## Install
 
 ```bash

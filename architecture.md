@@ -1,317 +1,66 @@
-# TracePerf Architecture Document
+# traceperf architecture
 
-## 1. System Overview
-
-TracePerf is a Node.js library for advanced console logging and performance tracking. It provides structured logs, execution flow tracing, and performance bottleneck detection to help developers debug and optimize their applications.
-
-## 2. Core Components
-
-### 2.1 Logger Core
-
-The central component of TracePerf is the Logger core, which handles basic logging functionality and coordinates between different modules.
+## One core, two entry points
 
 ```
-┌─────────────────────────────────────────┐
-│               Logger Core                │
-├─────────────────────────────────────────┤
-│ - Basic logging (info, warn, error)     │
-│ - Configuration management              │
-│ - Log filtering and formatting          │
-│ - Transport management                  │
-└───────────────┬─────────────────────────┘
-                │
-    ┌───────────┴───────────┐
-    │                       │
-┌───▼───────────┐   ┌───────▼─────────┐
-│  Execution    │   │   Performance   │
-│  Tracker      │   │   Monitor       │
-└───────────────┘   └─────────────────┘
+src/index.ts     (traceperf)          src/browser.ts  (traceperf/browser)
+  default instance + createTracePerf     BrowserLogger extends OptimizedPerformanceMonitor
+  integrations (Express/Fastify/Hono)    (+ info/warn/error/debug/group, browser output format)
+            \                                   /
+             \                                 /
+          src/core/optimized-performance-monitor.ts
+            OptimizedPerformanceMonitor   public API: track, createTrackable, registerModule,
+                                          trackObject, traced, start, use/onComplete, stats,
+                                          startTrace, enable/disable, setConfig
+            OptimizedExecutionTracker     the engine: timing, nesting context, sampling,
+                                          building records, dispatch
 ```
 
-### 2.2 Execution Tracker
+Both entries share the same engine, so behaviour (nesting, thresholds, sampling, statistics, hooks, exporters) is identical. Only the default console format differs.
 
-The Execution Tracker is responsible for tracing function calls and generating visual representations of the execution flow.
+## Life of a tracked call
 
-```
-┌─────────────────────────────────────────┐
-│            Execution Tracker             │
-├─────────────────────────────────────────┤
-│ - Function call tracking                │
-│ - Call stack management                 │
-│ - Execution time measurement            │
-│ - ASCII flow chart generation           │
-└─────────────────────────────────────────┘
-```
+1. **Wrap or call:** `createTrackable(fn)` returns a regular function that calls `_invoke`. `track(fn)` calls `_invoke` directly, without building a wrapper per call.
+2. **Fast exits:** if the instance is disabled, or the call is sampled out, `fn` is called directly (~40–60 ns).
+3. **Start:** `startTimer` records the start time and, when memory tracking is on, the heap via `v8.getHeapStatistics()`. It resolves per-call options against the current config and notifies plugins' `onStart`.
+4. **Parent lookup:** the parent is the "current execution" from the execution context. On Node.js that is `AsyncLocalStorage`, loaded at runtime with `process.getBuiltinModule` or an indirect `require`, so browser bundles don't pull it in. Elsewhere it is a synchronous stack.
+5. **Run:** `fn` runs inside the context as the current execution, so tracked calls inside it become its children.
+6. **Finish:** for a native promise, the end of the synchronous part is marked and the timer ends when the promise settles. Other thenables are returned untouched.
+7. **Report:** a finished child whose parent is still running waits in `executionTree`. When a top-level call (or an orphan) finishes, the tracker:
+   - builds one `ExecutionRecord` tree (ms; self time from the union of child intervals; sync time);
+   - releases the internal tree, so nothing grows with call count;
+   - adds every record to `StatsCollector`;
+   - prints with the reporter, unless silent, in `PERFORMANCE` mode, or under threshold (default `formatTree`, `BrowserLogger.formatFlow` in the browser, or a custom `reporter`);
+   - calls plugins' `onComplete` (exporters, `onComplete` listeners). Errors are isolated.
 
-### 2.3 Performance Monitor
+## Modules
 
-The Performance Monitor tracks execution time and memory usage, identifying potential bottlenecks in the application.
+| File | Responsibility |
+|---|---|
+| `core/optimized-performance-monitor.ts` | engine and public API |
+| `core/records.ts` | `ExecutionRecord`, `TracePerfPlugin`, `formatTree`, interval maths |
+| `core/stats.ts` | per-label statistics: exact counters, reservoir percentiles, label cap |
+| `core/exporters.ts` | Chrome/Perfetto trace (lane assignment for overlapping work), OpenTelemetry, JSON lines |
+| `core/event-loop.ts` | `monitorEventLoop()` on top of `perf_hooks.monitorEventLoopDelay` |
+| `core/env.ts` | bundler-safe loading of Node built-ins |
+| `integrations.ts` | Express / Fastify / Hono / fetch-handler helpers built on spans |
+| `types/options.ts` | public option and config types |
 
-```
-┌─────────────────────────────────────────┐
-│           Performance Monitor            │
-├─────────────────────────────────────────┤
-│ - High-resolution timing                │
-│ - Bottleneck detection                  │
-│ - Memory usage tracking                 │
-│ - Performance statistics                │
-└─────────────────────────────────────────┘
-```
+## Build outputs
 
-### 2.4 Formatters
+| Output | Built by |
+|---|---|
+| `dist/*.js` (CommonJS, `main`/`require`) | `tsc` |
+| `dist/esm/*.js` (ESM, `import`) | `tsc -p tsconfig.esm.json`, then `scripts/postbuild-esm.js` (adds `.js` extensions, `"type": "module"` scope, strips the CommonJS shim between `// <cjs-compat>` markers) |
+| `dist/traceperf.browser(.min).js` (`<script>`, global `TracePerf`) | `scripts/build-browser-global.js` (esbuild IIFE) |
 
-Formatters are responsible for converting log data into different output formats.
+## Guarantees and how they are checked
 
-```
-┌─────────────────────────────────────────┐
-│               Formatters                 │
-├─────────────────────────────────────────┤
-│ - CLI formatter (colored text)          │
-│ - JSON formatter                        │
-│ - ASCII art generator                   │
-│ - Custom formatters                     │
-└─────────────────────────────────────────┘
-```
-
-## 3. Data Flow
-
-### 3.1 Basic Logging Flow
-
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│  Logger  │───►│  Filter  │───►│ Formatter│───►│ Transport│
-│  API     │    │          │    │          │    │          │
-└──────────┘    └──────────┘    └──────────┘    └──────────┘
-```
-
-1. User calls a logging method (`info`, `warn`, `error`, `debug`)
-2. Log entry is filtered based on current logging mode
-3. Log entry is formatted according to the selected formatter
-4. Formatted log is sent to the appropriate transport (console, file, etc.)
-
-### 3.2 Execution Tracking Flow
-
-```
-┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
-│ Function │───►│ Execution│───►│Performance│───►│  Logger  │
-│ Wrapper  │    │ Tracker  │    │ Monitor  │    │          │
-└──────────┘    └──────────┘    └──────────┘    └──────────┘
-```
-
-1. User wraps a function with `tracePerf.track()`
-2. Execution Tracker intercepts function call and starts timing
-3. Original function is executed
-4. Execution Tracker records function completion and calculates metrics
-5. Performance Monitor analyzes metrics for bottlenecks
-6. Results are logged through the Logger core
-
-## 4. Key Interfaces
-
-### 4.1 Logger Interface
-
-```typescript
-interface ILogger {
-  info(message: string | object, ...args: any[]): void;
-  warn(message: string | object, ...args: any[]): void;
-  error(message: string | object, ...args: any[]): void;
-  debug(message: string | object, ...args: any[]): void;
-  
-  group(label: string): void;
-  groupEnd(): void;
-  
-  setMode(mode: 'dev' | 'staging' | 'prod' | string): void;
-  getMode(): string;
-  
-  track<T>(fn: () => T, options?: TrackOptions): T;
-}
-```
-
-### 4.2 Configuration Interface
-
-```typescript
-interface ILoggerConfig {
-  mode?: 'dev' | 'staging' | 'prod' | string;
-  level?: 'debug' | 'info' | 'warn' | 'error';
-  colorize?: boolean;
-  timestamp?: boolean;
-  performanceThreshold?: number; // ms
-  indentSize?: number;
-  transports?: Transport[];
-  formatters?: Formatter[];
-}
-```
-
-### 4.3 Track Options Interface
-
-```typescript
-interface ITrackOptions {
-  label?: string;
-  threshold?: number; // ms
-  includeMemory?: boolean;
-  silent?: boolean;
-}
-```
-
-## 5. Implementation Strategies
-
-### 5.1 Function Tracking Implementation
-
-TracePerf will use function wrappers to track execution:
-
-```typescript
-function track<T>(fn: () => T, options?: TrackOptions): T {
-  const start = process.hrtime();
-  const startMemory = process.memoryUsage().heapUsed;
-  
-  try {
-    // Get function name through reflection
-    const fnName = getFunctionName(fn);
-    
-    // Add to call stack
-    callStack.push(fnName);
-    
-    // Execute the function
-    const result = fn();
-    
-    // Calculate execution time
-    const [seconds, nanoseconds] = process.hrtime(start);
-    const duration = seconds * 1000 + nanoseconds / 1000000;
-    
-    // Calculate memory usage
-    const endMemory = process.memoryUsage().heapUsed;
-    const memoryDiff = endMemory - startMemory;
-    
-    // Check for bottlenecks
-    if (duration > (options?.threshold || defaultThreshold)) {
-      logBottleneck(fnName, duration, memoryDiff);
-    }
-    
-    // Log execution
-    logExecution(fnName, duration, memoryDiff, callStack.length - 1);
-    
-    return result;
-  } finally {
-    // Remove from call stack
-    callStack.pop();
-  }
-}
-```
-
-### 5.2 ASCII Flow Chart Generation
-
-TracePerf will generate ASCII flow charts using a combination of box-drawing characters:
-
-```typescript
-function generateFlowChart(executions: Execution[]): string {
-  let chart = '';
-  
-  for (let i = 0; i < executions.length; i++) {
-    const execution = executions[i];
-    
-    // Generate box for function
-    chart += '┌─────────────────┐\n';
-    chart += `│ ${execution.name.padEnd(15)} │  ⏱  ${execution.duration}ms`;
-    
-    if (execution.isSlow) {
-      chart += ' ⚠️ SLOW';
-    }
-    
-    chart += '\n';
-    chart += '└─────────────────┘\n';
-    
-    // Add arrow to next function if not the last one
-    if (i < executions.length - 1) {
-      chart += '           │  \n';
-      chart += '           ▼  \n';
-    }
-  }
-  
-  return chart;
-}
-```
-
-### 5.3 Conditional Logging Implementation
-
-TracePerf will implement conditional logging based on the current mode:
-
-```typescript
-function shouldLog(level: LogLevel, mode: LogMode): boolean {
-  const levelPriority = {
-    debug: 0,
-    info: 1,
-    warn: 2,
-    error: 3
-  };
-  
-  const modeLevels = {
-    dev: 'debug',    // In dev mode, show all logs
-    staging: 'warn',  // In staging, show only warnings and errors
-    prod: 'error'     // In prod, show only errors
-  };
-  
-  const modeMinLevel = modeLevels[mode] || 'info';
-  
-  return levelPriority[level] >= levelPriority[modeMinLevel];
-}
-```
-
-## 6. Performance Considerations
-
-### 6.1 Minimizing Overhead
-
-To minimize the performance impact of TracePerf, especially in production environments:
-
-1. **Conditional Compilation**: Use build-time flags to remove debug code in production
-2. **Sampling**: Implement sampling for high-frequency function calls
-3. **Buffering**: Buffer logs and flush periodically to reduce I/O overhead
-4. **Async Logging**: Use non-blocking operations for I/O-bound operations
-5. **Lazy Evaluation**: Evaluate log messages only if they will be output
-
-### 6.2 Memory Management
-
-To minimize memory usage:
-
-1. **Object Pooling**: Reuse log objects to reduce garbage collection
-2. **Stream Processing**: Process logs as streams to avoid storing large amounts of data
-3. **Circular Buffers**: Use circular buffers for storing recent logs
-4. **Weak References**: Use weak references for tracking objects
-
-## 7. Extension Points
-
-TracePerf is designed to be extensible through several mechanisms:
-
-1. **Custom Formatters**: Users can create custom formatters for specialized output
-2. **Custom Transports**: Support for sending logs to different destinations
-3. **Plugins**: Plugin system for adding new functionality
-4. **Middleware**: Middleware for processing logs before output
-
-## 8. Deployment Considerations
-
-### 8.1 Node.js Version Compatibility
-
-TracePerf will support:
-- Node.js 14.x and above (LTS versions)
-- Both CommonJS and ES Modules
-
-### 8.2 Dependencies
-
-To minimize the dependency footprint:
-- Use only essential dependencies
-- Prefer small, focused packages over large frameworks
-- Make heavy use of Node.js built-in modules
-
-### 8.3 Browser Compatibility
-
-While primarily designed for Node.js, TracePerf will provide:
-- A browser-compatible build with reduced functionality
-- Polyfills for Node.js-specific APIs
-
-## 9. Future Enhancements
-
-Potential future enhancements include:
-
-1. **Distributed Tracing**: Support for tracing across multiple services
-2. **Visualization Tools**: Web-based visualization of execution flows
-3. **Machine Learning**: Anomaly detection for performance issues
-4. **Integration with APM Tools**: Integration with Application Performance Monitoring tools
-5. **Remote Logging**: Support for sending logs to remote servers 
+| Guarantee | Check |
+|---|---|
+| Installs and works as CJS, ESM, TypeScript (node10/nodenext/bundler), bundled, `<script>` | `scripts/verify-package.js`, publint, are-the-types-wrong |
+| Works on Node.js 14–24 | CI runtime matrix (`verify-package.js --runtime`) |
+| Works in Chromium, Firefox, WebKit | Playwright (`test/browser`) |
+| README examples run and print what they show | `scripts/check-docs.js` |
+| Overhead and bundle size don't regress | `scripts/bench.js --check` |
+| Tracking never changes behaviour (`this`, return values, errors, name/length) | `src/__tests__/tracking-*.test.ts` |
