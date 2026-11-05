@@ -75,3 +75,22 @@ test('main(): usage, errors and exit codes', async () => {
   expect(run(['report', 'f.jsonl', '--top', '1'], { 'f.jsonl': jsonl })).toMatchObject({ code: 0 });
   expect(run(['report', '-']).out).toContain('12 calls');
 });
+
+test('--html writes a self-contained report with one bar per call', async () => {
+  const { trace, jsonl } = await sample();
+  for (const input of [trace, jsonl]) {
+    const files: Record<string, string> = { in: input };
+    const out: string[] = [];
+    const code = main(['report', 'in', '--html', 'r.html'], {
+      readFile: p => files[p], readStdin: () => '', writeFile: (p, c) => { files[p] = c; },
+      out: t => out.push(t), err: t => out.push(t),
+    });
+    expect(code).toBe(0);
+    const html = files['r.html'];
+    expect(html).toMatch(/^<!doctype html>/);
+    expect(html.match(/<g class="call">/g)).toHaveLength(12);
+    expect(html).not.toMatch(/<script|https?:\/\/(?!www\.w3\.org)/);
+    expect(html).toContain('GET /users &gt; db.query');
+    expect(html).toContain('#d73a49'); // failed calls are red
+  }
+});

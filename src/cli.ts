@@ -2,7 +2,7 @@
 /**
  * traceperf CLI
  *
- *   traceperf report <file> [--top N] [--sort total|mean|p95|max|count] [--json]
+ *   traceperf report <file> [--top N] [--sort total|mean|p95|max|count] [--json] [--html out.html]
  *
  * <file> is a Chrome/Perfetto trace written from startTrace().stop(), or a
  * JSON-lines file written by jsonLinesExporter(). Prints per-label
@@ -10,19 +10,29 @@
  */
 import { ExecutionRecord } from './core/records';
 import { LabelStats, StatsCollector, formatStatsTable } from './core/stats';
+import { renderHtmlReport } from './report-html';
 
 export interface ReportOptions {
   top?: number;
+  /** Return a self-contained HTML report instead of text */
+  html?: boolean;
+  title?: string;
   sort?: 'total' | 'mean' | 'p95' | 'max' | 'count';
   json?: boolean;
 }
 
-interface Call {
+export interface Call {
   label: string;
   path: string;
   duration: number;
   selfDuration: number;
   error?: string;
+  /** Start time in ms (trace clock or epoch, consistent within one input) */
+  start: number;
+  /** Nesting depth within its tree (0 = top level) */
+  depth: number;
+  /** Lane / thread the call ran on (concurrent work gets separate lanes) */
+  lane: number;
 }
 
 function record(label: string, duration: number, selfDuration: number, error?: string): ExecutionRecord {
@@ -60,6 +70,9 @@ export function parseCalls(text: string): Call[] {
           duration: (e.dur || 0) / 1000,
           selfDuration: typeof args.selfMs === 'number' ? args.selfMs : (e.dur || 0) / 1000,
           error: typeof args.error === 'string' ? args.error : undefined,
+          start: e.ts / 1000,
+          depth: stack.length,
+          lane: e.tid,
         });
         stack.push({ end: e.ts + (e.dur || 0), name: e.name });
       }
@@ -68,16 +81,32 @@ export function parseCalls(text: string): Call[] {
   }
 
   // JSON lines: one tree per line (recordToJSON format)
-  const visit = (node: any, parents: string[]) => {
+  // Top-level trees that overlap in time go on separate lanes
+  const laneEnds: number[] = [];
+  const visit = (node: any, parents: string[], lane: number) => {
     const path = [...parents, node.label].join(' > ');
+    const start = typeof node.start === 'string' ? Date.parse(node.start) : 0;
     calls.push({
       label: node.label,
       path,
       duration: node.durationMs,
       selfDuration: typeof node.selfMs === 'number' ? node.selfMs : node.durationMs,
       error: node.error,
+      start,
+      depth: parents.length,
+      lane,
     });
-    (node.children || []).forEach((child: any) => visit(child, [...parents, node.label]));
+    (node.children || []).forEach((child: any) => visit(child, [...parents, node.label], lane));
+  };
+  const pickLane = (start: number, end: number): number => {
+    let lane = laneEnds.findIndex(laneEnd => laneEnd <= start);
+    if (lane === -1) {
+      laneEnds.push(end);
+      lane = laneEnds.length - 1;
+    } else {
+      laneEnds[lane] = end;
+    }
+    return lane + 1;
   };
   trimmed.split('\n').forEach((line, i) => {
     if (!line.trim()) return;
@@ -90,7 +119,8 @@ export function parseCalls(text: string): Call[] {
     if (typeof node.label !== 'string' || typeof node.durationMs !== 'number') {
       throw new Error(`line ${i + 1} is not a traceperf record`);
     }
-    visit(node, []);
+    const start = typeof node.start === 'string' ? Date.parse(node.start) : 0;
+    visit(node, [], pickLane(start, start + node.durationMs));
   });
   return calls;
 }
@@ -105,6 +135,9 @@ export function report(text: string, options: ReportOptions = {}): string {
   const top = Math.max(0, options.top ?? 10);
   const slowest = calls.slice().sort((a, b) => b.duration - a.duration).slice(0, top);
 
+  if (options.html) {
+    return renderHtmlReport(calls, stats, { title: options.title, top: options.top ?? 20 });
+  }
   if (options.json) {
     return JSON.stringify({ calls: calls.length, stats, slowest }, null, 2);
   }
@@ -131,7 +164,7 @@ export function report(text: string, options: ReportOptions = {}): string {
   return lines.join('\n');
 }
 
-const USAGE = `Usage: traceperf report <file> [--top N] [--sort total|mean|p95|max|count] [--json]
+const USAGE = `Usage: traceperf report <file> [--top N] [--sort total|mean|p95|max|count] [--json] [--html out.html]
 
   <file>  a Chrome/Perfetto trace from startTrace().stop(), or JSON lines
           from jsonLinesExporter(); "-" reads stdin`;
@@ -139,6 +172,7 @@ const USAGE = `Usage: traceperf report <file> [--top N] [--sort total|mean|p95|m
 export function main(argv: string[], io: {
   readFile: (path: string) => string;
   readStdin: () => string;
+  writeFile?: (path: string, content: string) => void;
   out: (text: string) => void;
   err: (text: string) => void;
 }): number {
@@ -153,11 +187,13 @@ export function main(argv: string[], io: {
   }
   const options: ReportOptions = {};
   let file: string | undefined;
+  let htmlOut: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     if (arg === '--json') options.json = true;
     else if (arg === '--top') options.top = Number(rest[++i]);
     else if (arg === '--sort') options.sort = rest[++i] as ReportOptions['sort'];
+    else if (arg === '--html') htmlOut = rest[++i];
     else if (!file) file = arg;
     else {
       io.err(`traceperf: unexpected argument "${arg}"`);
@@ -178,6 +214,15 @@ export function main(argv: string[], io: {
   }
   try {
     const text = file === '-' ? io.readStdin() : io.readFile(file);
+    if (htmlOut !== undefined) {
+      if (!htmlOut || !io.writeFile) {
+        io.err('traceperf: --html expects an output file');
+        return 1;
+      }
+      io.writeFile(htmlOut, report(text, { ...options, html: true, title: `traceperf report: ${file === '-' ? 'stdin' : file.split(/[\\/]/).pop()}` }));
+      io.out(`wrote ${htmlOut}`);
+      return 0;
+    }
     io.out(report(text, options));
     return 0;
   } catch (error) {
@@ -193,6 +238,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   process.exitCode = main(process.argv.slice(2), {
     readFile: path => fs.readFileSync(path, 'utf8'),
     readStdin: () => fs.readFileSync(0, 'utf8'),
+    writeFile: (path, content) => fs.writeFileSync(path, content),
     out: text => console.log(text),
     err: text => console.error(text),
   });
