@@ -17,6 +17,7 @@ import {
   TracePerfPlugin,
   coveredLength,
   formatTree,
+  walkRecords,
 } from './records';
 import { LabelStats, StatsCollector, StatsOptions, formatStatsTable } from './stats';
 import { TraceRecorder, createTraceRecorder } from './exporters';
@@ -1040,6 +1041,34 @@ export class OptimizedPerformanceMonitor {
    */
   public onComplete(listener: (root: ExecutionRecord) => void): () => void {
     return this.use({ name: 'onComplete', onComplete: listener });
+  }
+
+  /**
+   * Call `listener` for every finished call (nested ones included) that
+   * took at least `threshold` ms. Pass a number, or per-label thresholds
+   * with an optional '*' default:
+   *
+   *   tp.onSlow(200, (call, root) => logger.warn(`${call.label} took ${call.duration}ms in ${root.label}`));
+   *   tp.onSlow({ 'db.query': 50, 'GET /search': 500, '*': 1000 }, alert);
+   *
+   * Works in every tracking mode and when silent. Returns an unsubscribe function.
+   */
+  public onSlow(
+    threshold: number | Record<string, number>,
+    listener: (call: ExecutionRecord, root: ExecutionRecord) => void
+  ): () => void {
+    const limitFor = typeof threshold === 'number'
+      ? () => threshold
+      : (label: string) => (label in threshold ? threshold[label] : threshold['*']);
+    return this.use({
+      name: 'onSlow',
+      onComplete: root => {
+        walkRecords(root, record => {
+          const limit = limitFor(record.label);
+          if (limit !== undefined && record.duration >= limit) listener(record, root);
+        });
+      }
+    });
   }
 
   /**

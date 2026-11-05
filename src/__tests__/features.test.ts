@@ -422,3 +422,30 @@ describe('event loop monitor', () => {
     expect(stats.p50).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('onSlow', () => {
+  test('fires for slow calls at any depth with a single threshold', () => {
+    const tp = createTracePerf({ silent: true, trackMemory: false });
+    const hits: string[] = [];
+    const off = tp.onSlow(15, (call, root) => hits.push(`${call.label}@${root.label}`));
+    const slow = tp.createTrackable(() => busyWait(20), { label: 'slowChild' });
+    const fast = tp.createTrackable(() => 1, { label: 'fastChild' });
+    tp.track(() => { fast(); slow(); }, { label: 'root' });
+    off();
+    tp.track(() => busyWait(20), { label: 'afterOff' });
+    expect(hits).toEqual(['root@root', 'slowChild@root']);
+  });
+
+  test('per-label thresholds with a * default', () => {
+    const tp = createTracePerf({ silent: true, trackMemory: false, trackingMode: TrackingMode.PERFORMANCE });
+    const hits: string[] = [];
+    tp.onSlow({ 'db.query': 5, '*': 1000 }, call => hits.push(call.label));
+    tp.track(() => busyWait(10), { label: 'db.query' });
+    tp.track(() => busyWait(10), { label: 'other' });
+    expect(hits).toEqual(['db.query']);
+    const none: string[] = [];
+    tp.onSlow({ only: 1 }, call => none.push(call.label));
+    tp.track(() => busyWait(5), { label: 'unlisted' });
+    expect(none).toEqual([]);
+  });
+});
