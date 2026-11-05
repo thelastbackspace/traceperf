@@ -54,7 +54,9 @@ describe('browser tracking', () => {
     expect(logs.lines()).toHaveLength(2);
     expect(logs.lines()[1]).not.toContain('first');
     for (let i = 0; i < 500; i++) tracker.track(() => i, { silent: true });
-    expect((tracker as any)._executionTracker._executions).toHaveLength(0);
+    const core = (tracker as any).executionTracker;
+    expect(Object.keys(core.executionTree)).toHaveLength(0);
+    expect(core.activeExecutions.size).toBe(0);
   });
 
   test('nested createTrackable calls print once, as one tree', () => {

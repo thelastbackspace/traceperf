@@ -6,27 +6,18 @@
  */
 
 import { ILoggerConfig, LogLevel, LogMode, ITrackOptions } from './types';
+import type { TracePerfConfig, TrackOptions } from './types/options';
+import { OptimizedPerformanceMonitor, TrackingModes } from './core/optimized-performance-monitor';
+import type { ExecutionRecord } from './core/records';
 
 // Define tracking mode constants to avoid circular dependencies
-export const TrackingMode = {
-  PERFORMANCE: 'performance',
-  BALANCED: 'balanced',
-  DETAILED: 'detailed',
-  DEBUG: 'debug'
-};
+export const TrackingMode = TrackingModes;
 
 /**
  * Configuration accepted by the browser createTracePerf()/BrowserLogger
  */
-export interface IBrowserTracePerfConfig extends Partial<ILoggerConfig> {
-  /** Suppress console output (default false) */
-  silent?: boolean;
-  /** Track memory usage where the browser exposes it (default true) */
-  trackMemory?: boolean;
-  /** Only report calls taking at least this many milliseconds */
-  threshold?: number;
-  /** Attach nested tracked calls to their caller (default true) */
-  enableNestedTracking?: boolean;
+export interface IBrowserTracePerfConfig
+  extends Omit<Partial<ILoggerConfig>, 'trackingMode'>, TracePerfConfig {
   /** Use an existing logger instead of creating a new one */
   logger?: BrowserLogger;
 }
@@ -135,7 +126,7 @@ class BrowserPerformanceMonitor {
   public generateSuggestion(
     functionName: string,
     duration: number,
-    memoryUsage?: number
+    _memoryUsage?: number
   ): string {
     if (duration > 1000) {
       return `🛠 Potential Fix: Consider optimizing or adding caching to ${functionName}`;
@@ -474,33 +465,65 @@ class BrowserExecutionTracker {
 }
 
 /**
- * Browser-compatible logger
+ * Browser-compatible TracePerf instance.
+ *
+ * Shares the core tracker with the Node.js entry (same nesting, statistics,
+ * hooks, exporters and options) and adds console-style logging methods.
+ * Output uses the browser format:
+ *
+ *   Execution Flow:
+ *   → parent (12.34ms)
+ *     → child (10.01ms)
  */
-class BrowserLogger {
+class BrowserLogger extends OptimizedPerformanceMonitor {
   private _mode: LogMode = 'dev';
   private _indentLevel: number = 0;
-  private _executionTracker: BrowserExecutionTracker;
-  private _performanceMonitor: BrowserPerformanceMonitor;
-  private _trackingMode: string = TrackingMode.BALANCED;
-  private _silent: boolean;
-  private _trackMemory: boolean;
-  private _threshold?: number;
-  private _enableNestedTracking: boolean;
+  private _slowThreshold: number;
 
   constructor(config: IBrowserTracePerfConfig = {}) {
+    super({
+      trackingMode: config.trackingMode,
+      silent: config.silent,
+      trackMemory: config.trackMemory,
+      enableNestedTracking: config.enableNestedTracking,
+      threshold: config.threshold,
+      sampleRate: config.sampleRate,
+      enabled: config.enabled,
+      blockingThreshold: config.blockingThreshold,
+      stats: config.stats,
+      plugins: config.plugins,
+      onComplete: config.onComplete,
+      reporter: config.reporter
+    });
     this._mode = config.mode || 'dev';
-    this._trackingMode = config.trackingMode || TrackingMode.BALANCED;
-    this._silent = config.silent ?? false;
-    this._trackMemory = config.trackMemory ?? true;
-    this._threshold = config.threshold;
-    this._enableNestedTracking = config.enableNestedTracking ?? true;
-    this._executionTracker = new BrowserExecutionTracker({
-      defaultThreshold: config.performanceThreshold || 100,
-      onRootComplete: execution => this.report(execution),
-    });
-    this._performanceMonitor = new BrowserPerformanceMonitor({
-      defaultThreshold: config.performanceThreshold || 100,
-    });
+    this._slowThreshold = config.performanceThreshold || 100;
+    if (!config.reporter) {
+      this.setConfig({ reporter: root => console.log(this.formatFlow(root)) });
+    }
+  }
+
+  /**
+   * Render an execution tree in the browser output format
+   */
+  public formatFlow(root: ExecutionRecord): string {
+    const lines = ['Execution Flow:'];
+    const visit = (record: ExecutionRecord, level: number) => {
+      const indent = '  '.repeat(level);
+      const slowThreshold = record.threshold > 0 ? record.threshold : this._slowThreshold;
+      const isSlow = record.duration > slowThreshold;
+      const memory = record.memoryDelta !== undefined && record.memoryDelta > 0
+        ? ` [${formatMemorySize(record.memoryDelta)}]` : '';
+      lines.push(`${indent}→ ${record.label} (${record.duration.toFixed(2)}ms)${isSlow ? ' [SLOW]' : ''}${memory}`);
+      const suggestion = isSlow ? slowSuggestion(record.label, record.duration) : '';
+      if (suggestion) {
+        lines.push(`${indent}  ⚠️ ${suggestion}`);
+      }
+      record.children
+        .filter(child => child.duration >= child.threshold)
+        .forEach(child => visit(child, level + 1));
+    };
+    visit(root, 0);
+    return lines.join('\n');
   }
 
   public info(message: string | object, ...args: any[]): void {
@@ -556,62 +579,21 @@ class BrowserLogger {
    * @returns This instance for chaining
    */
   public setTrackingMode(mode: string): BrowserLogger {
-    this._trackingMode = mode;
+    super.setTrackingMode(mode);
     return this;
   }
 
   /**
-   * Get the current tracking mode
-   * @returns Current tracking mode
-   */
-  public getTrackingMode(): string {
-    return this._trackingMode;
-  }
-
-  public track<T>(fn: () => T, options?: ITrackOptions): T {
-    const threshold = options?.threshold ?? this._threshold;
-    
-    // The tree is printed by report() when the outermost call finishes
-    // (after the promise settles for async functions).
-    return this._executionTracker.track(fn, {
-      ...options,
-      ...(threshold !== undefined ? { threshold } : {}),
-      silent: options?.silent ?? this._silent,
-      reportThreshold: threshold ?? 0,
-      trackMemory: options?.trackMemory ?? this._trackMemory,
-      enableNestedTracking: options?.enableNestedTracking ?? this._enableNestedTracking,
-      trackingMode: options?.trackingMode || this._trackingMode
-    });
-  }
-
-  /**
-   * Print a finished top-level execution unless silenced or below threshold
-   */
-  private report(execution: any): void {
-    if (execution.silent || execution.duration < (execution.reportThreshold ?? 0)) {
-      return;
-    }
-    console.log(this._executionTracker.generateFlowChart([execution]).replace(/\n$/, ''));
-  }
-
-  /**
-   * Create a trackable version of a function
-   * 
-   * This is a helper method to create a tracked version of a function
-   * that can be used for nested function tracking.
-   * 
-   * @param fn - The function to make trackable
-   * @param options - Options for tracking
-   * @returns A tracked version of the function
+   * Create a trackable version of a function. Calls go through `track()`,
+   * so nested trackables attach to their caller.
    */
   public createTrackable<T extends (...args: any[]) => any>(
     fn: T, 
-    options?: Omit<ITrackOptions, 'label'> & { label?: string }
+    options: TrackOptions = {}
   ): (...args: Parameters<T>) => ReturnType<T> {
-    const label = options?.label || fn.name || 'anonymous';
+    const label = options.label || fn.name || 'anonymous';
     
-    // Use a regular function so callers keep their own `this`;
-    // unspecified options are resolved by track() at call time
+    // Use a regular function so callers keep their own `this`
     const run = (thisArg: any, args: Parameters<T>): ReturnType<T> =>
       this.track(() => fn.apply(thisArg, args), {
         ...options,
@@ -642,7 +624,7 @@ class BrowserLogger {
     } else {
       try {
         formattedMessage = JSON.stringify(message, null, 2);
-      } catch (error) {
+      } catch {
         formattedMessage = String(message);
       }
     }
@@ -667,6 +649,28 @@ class BrowserLogger {
         break;
     }
   }
+}
+
+function formatMemorySize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes.toFixed(2)}B`;
+  } else if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(2)}KB`;
+  } else if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+}
+
+function slowSuggestion(name: string, duration: number): string {
+  if (duration > 500) {
+    return `Function "${name}" took ${duration.toFixed(2)}ms to execute. Consider optimizing or breaking it down into smaller functions.`;
+  } else if (duration > 200) {
+    return `Function "${name}" took ${duration.toFixed(2)}ms to execute. Consider optimizing if called frequently.`;
+  } else if (duration > 100) {
+    return `Function "${name}" took ${duration.toFixed(2)}ms to execute. Monitor if called in critical paths.`;
+  }
+  return '';
 }
 
 /**
