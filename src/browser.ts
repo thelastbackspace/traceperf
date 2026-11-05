@@ -303,10 +303,9 @@ class BrowserExecutionTracker {
     const trackMemory = options?.trackMemory ?? true;
     const trackingMode = options?.trackingMode || TrackingMode.BALANCED;
     
-    // Create a tracked version of the function using arrow function
-    const self = this;
-    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
-      return self.track(() => fn.apply(this, args), {
+    // Use a regular function so callers keep their own `this`
+    const run = (thisArg: any, args: Parameters<T>): ReturnType<T> =>
+      this.track(() => fn.apply(thisArg, args), {
         ...options,
         label,
         threshold,
@@ -314,6 +313,8 @@ class BrowserExecutionTracker {
         trackMemory,
         trackingMode
       }) as ReturnType<T>;
+    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+      return run(this, args);
     } as (...args: Parameters<T>) => ReturnType<T>;
   }
 
@@ -561,10 +562,9 @@ class BrowserLogger {
     const trackMemory = options?.trackMemory ?? true;
     const trackingMode = options?.trackingMode || this._trackingMode;
     
-    // Create a tracked version of the function using arrow function
-    const self = this;
-    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
-      return self.track(() => fn.apply(this, args), {
+    // Use a regular function so callers keep their own `this`
+    const run = (thisArg: any, args: Parameters<T>): ReturnType<T> =>
+      this.track(() => fn.apply(thisArg, args), {
         ...options,
         label,
         threshold,
@@ -572,6 +572,8 @@ class BrowserLogger {
         trackMemory,
         trackingMode
       }) as ReturnType<T>;
+    return function(this: any, ...args: Parameters<T>): ReturnType<T> {
+      return run(this, args);
     } as (...args: Parameters<T>) => ReturnType<T>;
   }
 

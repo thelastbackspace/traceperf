@@ -213,16 +213,16 @@ describe('OptimizedPerformanceMonitor', () => {
   });
   
   test('edge case: tracking a non-function throws an error', () => {
-    // @ts-ignore deliberately testing wrong types
+    // @ts-expect-error deliberately testing wrong types
     expect(() => monitor.track('not a function')).toThrow();
-    // @ts-ignore deliberately testing wrong types
+    // @ts-expect-error deliberately testing wrong types
     expect(() => monitor.createTrackable('not a function')).toThrow();
   });
   
   test('edge case: registerModule with non-object throws an error', () => {
-    // @ts-ignore deliberately testing wrong types
+    // @ts-expect-error deliberately testing wrong types
     expect(() => monitor.registerModule('not an object')).toThrow();
-    // @ts-ignore deliberately testing wrong types
+    // @ts-expect-error deliberately testing wrong types
     expect(() => monitor.registerModule(null)).toThrow();
   });
   
@@ -423,8 +423,6 @@ describe('OptimizedPerformanceMonitor Branch Coverage Tests', () => {
   });
 
   test('tracking with explicit parentId should maintain execution hierarchy', async () => {
-    let capturedExecutionId = '';
-    
     // Create a trackable function that captures its execution ID (indirectly)
     const trackedFn = monitor.createTrackable(() => {
       // We'll capture the ID outside this function
