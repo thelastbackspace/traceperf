@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - Unreleased
+
+### Added
+- **OpenTelemetry live mode:** `openTelemetryExporter(api, { live: true })` opens each span when the call starts and keeps it active while the call runs (across `await`). Spans from other instrumentation (database drivers, HTTP clients) then nest under traceperf's spans.
+- `wrap(execution, run)` plugin hook, to run tracked code inside a context. A `wrap` that throws is reported once and skipped.
+- **Auto-instrumentation** (each idempotent, each returns an uninstall function):
+  - `instrumentFetch(tp)`: every `fetch()` call;
+  - `instrumentHttp(tp)`: Node `http`/`https` `request` and `get`, which covers axios and got;
+  - `instrumentMethods(tp, target, methods?, { prefix, labelFor })`: any client, e.g. `pg.Client.prototype.query`, with per-call labels;
+  - `prismaExtension(tp)`: Prisma client extension.
+- **`traceperf` CLI:** `npx traceperf report <trace.json | calls.jsonl> [--top N] [--sort ...] [--json]` prints per-label statistics and the slowest calls with their call path.
+- **Bun and Deno** support, verified by a runtime smoke test in CI (nesting across `await` works on both).
+- `docs/benchmarks.md`: overhead compared with `performance.now()`, `timerify` and OpenTelemetry spans (`npm run bench:compare`).
+- `examples/playground`: an Express app with a deliberate N+1 query problem, with a StackBlitz link.
+- Exported `TracedDecorator` and `Uninstall` types.
+
+### Fixed
+- The real `@opentelemetry/api` didn't type-check against `openTelemetryExporter` (also fixed in 0.3.0).
+
+### Development
+- CI publishes on `v*` tags with npm provenance, after every job passes, and checks that the tag matches `package.json` (see RELEASING.md).
+- CI type-checks explicitly (`npm run typecheck`) and builds the TypeDoc API reference with warnings as errors (`npm run docs:api`).
+- Added issue and PR templates, plus a public ROADMAP.md.
+
 ## [1.0.0] - Unreleased
 
 Breaking release that removes the legacy logging API. See [MIGRATION.md](MIGRATION.md). The tracking API is unchanged from 0.3.

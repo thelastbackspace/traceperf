@@ -5,11 +5,16 @@
 [![npm version](https://img.shields.io/npm/v/traceperf.svg)](https://www.npmjs.com/package/traceperf)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
+![traceperf output: a request's call tree with self and sync time, a blocked-event-loop warning and a stats table](docs/assets/terminal.svg)
+
 - **Call trees, not just timers.** Tracked calls inside tracked calls nest automatically, including across `await` on Node.js.
 - **Honest numbers.** You get total, self and synchronous time for each call. Detailed mode flags calls that blocked the event loop.
 - **Production-ready.** Stats are bounded per label (p50/p95/p99), sampling is built in, and `enabled: false` makes tracking a pass-through costing ~40 ns.
 - **Gets data out.** Chrome/Perfetto traces, OpenTelemetry spans, JSON lines, or your own `onComplete` hook.
-- **Fits your stack.** Express, Fastify, Hono, Next.js route handlers, decorators, CommonJS, ESM, TypeScript, browsers, Node.js 14+. There are no runtime dependencies.
+- **Zero-effort coverage.** One line tracks every `fetch`, HTTP request, database call or Prisma query.
+- **Fits your stack.** Express, Fastify, Hono, Next.js route handlers, decorators, CommonJS, ESM, TypeScript, browsers, Node.js 14+, Bun and Deno. There are no runtime dependencies.
+
+Try it in the browser: [the playground](examples/playground) is an Express API with a hidden N+1 query problem.
 
 > Upgrading from 0.x? The tracking API is unchanged; only the old undocumented logging classes were removed. See [MIGRATION.md](MIGRATION.md).
 
@@ -95,6 +100,45 @@ class UserService {
 ```
 
 `registerModule(obj)` is still available. It returns a copy of a plain object with its own methods tracked; `trackObject` is usually the better choice.
+
+## Auto-instrumentation
+
+Track I/O without wrapping each call. Every `instrument*` call patches in place, is safe to call twice, and returns an uninstall function.
+
+```javascript
+const { createTracePerf, instrumentFetch, instrumentHttp, instrumentMethods } = require('traceperf');
+const tp = createTracePerf({ trackMemory: false });
+
+instrumentFetch(tp);   // every fetch(): "fetch GET api.example.com/users"
+instrumentHttp(tp);    // node http/https (axios, got, ...): "http GET api.example.com/users"
+
+// Any client: patch its prototype, with per-call labels
+class Db { async query(sql) { return []; } }
+instrumentMethods(tp, Db.prototype, ['query'], {
+  labelFor: (_method, [sql]) => `db ${String(sql).trim().split(/\s+/)[0]}`, // "db SELECT"
+});
+
+await tp.track(async () => { await new Db().query('SELECT * FROM users'); }, { label: 'handler' });
+```
+
+```
+└─ handler: 0.112 ms
+  └─ db SELECT: 0.031 ms
+```
+
+Recipes for real drivers:
+
+<!-- docs:skip -->
+```javascript
+instrumentMethods(tp, require('pg').Client.prototype, ['query'], {
+  labelFor: (_m, [q]) => `pg ${String(q?.text ?? q).trim().split(/\s+/)[0]}`,
+});
+instrumentMethods(tp, require('ioredis').prototype, ['get', 'set', 'del'], { prefix: 'redis.' });
+
+const prisma = new PrismaClient().$extends(prismaExtension(tp)); // "prisma.User.findMany"
+```
+
+`fetch` timing ends when the response headers arrive. `http` timing ends when the body has been read. Responses with status ≥ 500 mark the call failed.
 
 ## Nested tracking
 
@@ -279,6 +323,8 @@ const tp = createTracePerf({ silent: true, plugins: [openTelemetryExporter(otel)
 
 Each finished tree becomes spans with the real start and end times, parent/child links, error status and `traceperf.*` attributes. Top-level spans are parented to the OpenTelemetry context that was active when the call started, so they join your existing request traces in Jaeger, Honeycomb, Datadog or Grafana. traceperf doesn't depend on `@opentelemetry/api`; you pass in the one your app uses.
 
+**Live mode** (`openTelemetryExporter(otel, { live: true })`) opens each span when the call starts and makes it the active context while the call runs, across `await`. Spans created by your other instrumentation (pg, http, Redis) then appear inside traceperf's spans.
+
 ### Hooks, JSON lines and custom output
 
 ```javascript
@@ -337,7 +383,7 @@ tp.disable(); // kill switch: tracked functions become plain calls
 tp.enable();
 ```
 
-Overhead per call of a trivial function on Node 24 (`npm run bench`). CI fails the build if any of these regress past generous budgets.
+Overhead per call of a trivial function on Node 24 (`npm run bench`). CI fails the build if any of these regress past generous budgets. For a comparison with `performance.now()`, `timerify` and OpenTelemetry spans, see [docs/benchmarks.md](docs/benchmarks.md).
 
 | Scenario | Overhead |
 |---|---|
@@ -348,6 +394,24 @@ Overhead per call of a trivial function on Node 24 (`npm run bench`). CI fails t
 | tracked with memory sampling and nesting (default) | ~3.5–4.5 µs |
 
 That's fine for request handlers, database calls and anything else that takes milliseconds. For tight loops called millions of times, track the loop rather than each iteration, or use `sampleRate`.
+
+### Analyzing saved data: `traceperf report`
+
+```bash
+npx traceperf report trace.json          # from startTrace().stop()
+npx traceperf report calls.jsonl --top 5 --sort p95   # from jsonLinesExporter()
+```
+
+```
+120 calls, 3 labels (sorted by total)
+
+label         calls  errors  total ms   mean    p50    p95    p99    max  self mean
+...
+Slowest 5 calls:
+  95.212 ms  GET /users > db.query
+```
+
+Add `--json` for machine-readable output. A file of `-` reads stdin.
 
 ### Event-loop delay
 
@@ -412,7 +476,7 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 
 ## Compatibility
 
-- **Node.js** 14+ (tested on 14, 16, 18, 20, 22 and 24), plus current Chromium, Firefox and WebKit.
+- **Node.js** 14+ (tested on 14, 16, 18, 20, 22 and 24), **Bun** and **Deno** (nesting across `await` works on all three), plus current Chromium, Firefox and WebKit.
 - **Module formats:** CommonJS (`require`), ESM (`import`), TypeScript (`node10`, `node16`/`nodenext` and `bundler` resolution), bundlers (esbuild, webpack, Vite, ...), and `<script>`.
 - **Runtime dependencies:** none.
 
@@ -421,10 +485,12 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 - In browsers (and ESM on Node < 20.16), nesting doesn't survive `await`, because there is no `AsyncLocalStorage`.
 - The heap delta is the V8 heap difference across the call. Other concurrent work and GC affect it, so treat it as a hint, not an allocation profile.
 - `require('traceperf')` and `import 'traceperf'` each have their own default instance. Instances you create with `createTracePerf()` are unaffected.
-- OpenTelemetry spans are created when the top-level call finishes. They are linked to the active context at the start, but downstream auto-instrumented spans don't see a live traceperf span as their parent.
+- In the default OpenTelemetry mode, spans are created when the top-level call finishes. Use `{ live: true }` if other instrumentation's spans should nest inside traceperf's.
+- `fetch` instrumentation times the request until the response headers arrive, not the time spent reading the body.
 
 ## Examples
 
+- `examples/playground/`: an Express app with a hidden N+1 query problem.
 - `examples/optimized-tracking-example.js`: the basics.
 - `examples/stats-and-export.js`: statistics, spans, a Perfetto trace and JSON lines in a production-style setup.
 - `examples/browser-example.html` / `.js`: browser usage.
@@ -439,6 +505,10 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 - `npm run verify:docs`: runs every example in this README and checks its output.
 - `npm run test:browser`: Playwright tests in Chromium, Firefox and WebKit.
 - `npm run bench:check`: overhead and bundle-size budgets.
+- `npm run test:runtimes`: smoke tests on Bun and Deno.
+- `npm run docs:api`: the API reference (TypeDoc).
+
+What's planned is in [ROADMAP.md](ROADMAP.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
