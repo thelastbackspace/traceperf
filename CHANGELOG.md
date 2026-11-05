@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - Unreleased
+
+### Fixed
+- `import 'traceperf'` (ESM) failed with `ERR_MODULE_NOT_FOUND`. The ESM build is now real ESM (explicit `.js` extensions, `"type": "module"` scope) and no longer contains a `module.exports` shim that bundlers reject.
+- TypeScript users on `moduleResolution: node16/nodenext` saw the default export as the whole module (`tp.track` did not type-check). The `exports` map now lists `types` first, with separate typings for `import` and `require`.
+- `require('traceperf')` was missing most named exports declared in the type definitions (`getTimestamp`, `getMemoryUsage`, `OptimizedExecutionTracker`, `Logger`, ...).
+- The documented `<script>` build `dist/traceperf.browser.js` (global `TracePerf`) did not exist. It is now built.
+- `threshold` (instance or per call) did nothing: every call was printed. Calls shorter than their threshold (in ms) are now not reported. `threshold: 0` was also silently replaced by 100.
+- Per-call `silent`, `trackMemory` and `trackingMode` options were ignored, including `registerModule(mod, { silent: true })`.
+- `setSampleRate()` and `setConfig()` did not affect functions created earlier with `createTrackable()`/`registerModule()`.
+- Nested tracked calls were never linked to their caller: each one printed separately, children before parents. Nested calls now form one tree, printed once when the outermost call finishes. On Node.js this also works across `await`.
+- Tree output drew grandchildren as if they hung off the root; `│` connectors are now drawn.
+- Memory leak: every finished execution and its return value were kept forever. Finished trees are now released.
+- Tracked functions lost the caller's `this` (methods tracked via `createTrackable`/`registerModule` saw the internal tracker as `this`).
+- Returning a non-promise thenable crashed with `Cannot read properties of undefined (reading 'catch')`; such values are now returned untouched.
+- `captureArgs: true` threw on null-prototype objects. Arguments are now rendered safely and shown in the output, e.g. `getUser(123, {"cache":true})` (issue #1).
+- Memory tracking added ~50µs per call by calling `process.memoryUsage()` twice; it now reads the V8 heap directly (~4.5µs per tracked call).
+- Browser: async functions were timed only until they returned a promise; every `track()` reprinted the whole history (which also grew forever); nested `createTrackable` children printed before their parent finished; the documented `silent`, `trackMemory`, `threshold` and `logger` options were ignored and rejected by TypeScript; in SSR/workers each call emitted a `console.warn`.
+- Example scripts in `examples/test/` loaded files that no longer exist, and the nested example in `examples/optimized-tracking-example.js` did not nest.
+- `npm run lint` failed with 7 errors.
+
+### Changed
+- The default `threshold` is now 0 (report every call). The previous default of 100 was never applied, so output is unchanged for users who did not set a threshold.
+
 ## [0.2.0] - 2024-03-18
 
 ### Added
