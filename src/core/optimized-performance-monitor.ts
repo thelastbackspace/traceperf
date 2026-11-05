@@ -76,6 +76,7 @@ export interface ExecutionTrackerOptions {
   showMemoryUsage?: boolean;
   enableNestedTracking?: boolean;
   threshold?: number;
+  sampleRate?: number;
 }
 
 /**
@@ -85,6 +86,11 @@ export interface TimerOptions {
   trackMemory?: boolean;
   captureArgs?: boolean;
   args?: any[];
+  /** Per-execution overrides; fall back to the tracker's current settings */
+  silent?: boolean;
+  trackingMode?: string;
+  /** Minimum duration in milliseconds for this execution to be reported */
+  threshold?: number;
 }
 
 /**
@@ -105,6 +111,9 @@ export interface ExecutionData {
   memoryDelta?: number;
   result?: any;
   error?: Error | null;
+  silent?: boolean;
+  trackingMode?: string;
+  threshold?: number;
 }
 
 const MAX_ARG_LENGTH = 50;
@@ -141,6 +150,8 @@ export const formatArg = (arg: unknown): string => {
   return text.length > MAX_ARG_LENGTH ? `${text.slice(0, MAX_ARG_LENGTH - 1)}…` : text;
 };
 
+const clampRate = (rate: number): number => Math.max(0, Math.min(1, rate));
+
 const isNativePromise = (value: unknown): value is Promise<unknown> =>
   value instanceof Promise || Object.prototype.toString.call(value) === '[object Promise]';
 
@@ -158,6 +169,7 @@ export class OptimizedExecutionTracker {
   public silent: boolean;
   public trackingMode: string;
   public defaultThreshold: number;
+  public defaultSampleRate: number;
   
   // Formatters for flow chart generation
   private _formatters = {
@@ -179,7 +191,8 @@ export class OptimizedExecutionTracker {
     this.enableNestedTracking = options.enableNestedTracking ?? true;
     this.silent = options.silent ?? false;
     this.trackingMode = options.trackingMode ?? TrackingModes.BALANCED;
-    this.defaultThreshold = options.threshold ?? 100;
+    this.defaultThreshold = options.threshold ?? 0;
+    this.defaultSampleRate = clampRate(options.sampleRate ?? 1);
   }
 
   /**
@@ -190,8 +203,11 @@ export class OptimizedExecutionTracker {
    * @returns Execution ID
    */
   public startTimer(label: string, parentExecutionId: string | null = null, options: TimerOptions = {}): string {
+    // Per-execution settings, falling back to the tracker's current config
+    const trackingMode = options.trackingMode ?? this.trackingMode;
+    const trackMemory = options.trackMemory ?? this.showMemoryUsage;
     // Skip detailed tracking in performance mode
-    const collectMemory = this.trackingMode !== TrackingModes.PERFORMANCE && this.showMemoryUsage;
+    const collectMemory = trackingMode !== TrackingModes.PERFORMANCE && trackMemory;
     
     const startTime = getTimestamp();
     const executionId = (++this.currentExecutionId).toString();
@@ -206,7 +222,10 @@ export class OptimizedExecutionTracker {
       children: [],
       args: options.captureArgs && options.args ? 
         Array.from(options.args).map(formatArg) : [],
-      complete: false
+      complete: false,
+      silent: options.silent ?? this.silent,
+      trackingMode,
+      threshold: options.threshold ?? this.defaultThreshold
     };
     
     // Collect memory usage if enabled
@@ -249,8 +268,8 @@ export class OptimizedExecutionTracker {
     execution.error = error;
     execution.complete = true;
     
-    // Only collect memory in non-performance modes
-    if (this.trackingMode !== TrackingModes.PERFORMANCE && this.showMemoryUsage) {
+    // Only collect memory if it was collected at start
+    if (execution.memoryAtStart !== undefined) {
       execution.memoryAtEnd = getMemoryUsage();
       execution.memoryDelta = execution.memoryAtEnd - (execution.memoryAtStart || 0);
     }
@@ -258,13 +277,22 @@ export class OptimizedExecutionTracker {
     // Store in the execution tree
     this.executionTree[executionId] = { ...execution };
     
-    // Generate flow chart if not silent
-    if (!this.silent && this.trackingMode !== TrackingModes.PERFORMANCE) {
+    // Generate flow chart if not silent and slow enough to report
+    if (!execution.silent &&
+        execution.trackingMode !== TrackingModes.PERFORMANCE &&
+        this._meetsThreshold(execution)) {
       const flowChart = this._generateExecutionFlowChart(execution);
-      console.log(flowChart);
+      console.log(flowChart.replace(/\n$/, ''));
     }
     
     return execution;
+  }
+
+  /**
+   * Whether an execution ran at least as long as its threshold (ms)
+   */
+  private _meetsThreshold(execution: ExecutionData): boolean {
+    return execution.duration / 1000000 >= (execution.threshold ?? 0);
   }
 
   /**
@@ -281,8 +309,9 @@ export class OptimizedExecutionTracker {
     isLastChild: boolean = true, 
     ancestors: boolean[] = []
   ): string {
+    const trackingMode = execution.trackingMode ?? this.trackingMode;
     // Skip in performance mode
-    if (this.trackingMode === TrackingModes.PERFORMANCE) {
+    if (trackingMode === TrackingModes.PERFORMANCE) {
       return '';
     }
     
@@ -295,17 +324,16 @@ export class OptimizedExecutionTracker {
     const argsStr = execution.args && execution.args.length > 0 ? `(${execution.args.join(', ')})` : '';
     let line = `${formatters.indent.repeat(depth)}${isLastChild ? formatters.lastChildPrefix : formatters.childPrefix}${execution.label}${argsStr}: ${durationStr} ms`;
     
-    // Add memory usage if enabled and in detailed modes
-    if (this.showMemoryUsage && 
-        execution.memoryDelta !== undefined && 
-        this.trackingMode !== TrackingModes.PERFORMANCE) {
+    // Add memory usage if it was collected for this execution
+    if (execution.memoryAtStart !== undefined && execution.memoryDelta !== undefined) {
       const memoryStr = (execution.memoryDelta / 1024).toFixed(2);
       const sign = execution.memoryDelta >= 0 ? '+' : '';
       line += ` ${formatters.memoryLabel}${sign}${memoryStr} KB`;
     }
     
     // Add error indicator
-    if (execution.error && (this.trackingMode === TrackingModes.DETAILED || this.trackingMode === TrackingModes.DEBUG)) {
+    if (execution.error !== null && execution.error !== undefined &&
+        (trackingMode === TrackingModes.DETAILED || trackingMode === TrackingModes.DEBUG)) {
       const error: any = execution.error;
       line += ` ${formatters.errorMarker}${error instanceof Error ? error.message : String(error)}`;
     }
@@ -313,7 +341,7 @@ export class OptimizedExecutionTracker {
     flowChart += line + '\n';
     
     // Process children (skip in performance mode)
-    if (execution.children && execution.children.length > 0 && this.trackingMode !== TrackingModes.PERFORMANCE) {
+    if (execution.children && execution.children.length > 0) {
       const childExecutions = execution.children
         .map(childId => this.executionTree[childId] || this.activeExecutions.get(childId))
         .filter(Boolean);
@@ -349,20 +377,20 @@ export class OptimizedExecutionTracker {
     
     const label = options.label || fn.name || 'anonymous';
     const parentExecutionId = options.parentExecutionId || null;
-    const silent = options.hasOwnProperty('silent') ? options.silent : this.silent;
+    const silent = options.silent ?? this.silent;
     const trackingMode = options.trackingMode || this.trackingMode;
-    const sampleRate = options.hasOwnProperty('sampleRate') ? 
-      Math.max(0, Math.min(1, options.sampleRate)) : 1.0;
     
     // Performance optimization - if in performance mode and silent, return original function
     if (trackingMode === TrackingModes.PERFORMANCE && 
-        (options.silent || this.silent) && 
+        silent && 
         !this.enableNestedTracking) {
       return fn;
     }
     
     const invoke = (thisArg: unknown, args: Parameters<T>): ReturnType<T> => {
       // Apply sampling - randomly decide whether to track this call
+      const sampleRate = options.sampleRate !== undefined ?
+        clampRate(options.sampleRate) : this.defaultSampleRate;
       const shouldSample = Math.random() < sampleRate;
       
       // If not sampling this call, just execute the function directly
@@ -375,9 +403,12 @@ export class OptimizedExecutionTracker {
         label,
         parentExecutionId,
         {
-          trackMemory: options.trackMemory !== undefined ? options.trackMemory : this.showMemoryUsage,
+          trackMemory: options.trackMemory,
           captureArgs: options.captureArgs,
-          args: args
+          args: args,
+          silent: options.silent,
+          trackingMode: options.trackingMode,
+          threshold: options.threshold
         }
       );
       
@@ -440,7 +471,7 @@ export class OptimizedExecutionTracker {
     
     // Performance optimization - if in performance mode and silent, return original module
     if (trackingMode === TrackingModes.PERFORMANCE && 
-        (options.silent || this.silent) && 
+        (options.silent ?? this.silent) && 
         !this.enableNestedTracking) {
       return module;
     }
@@ -530,7 +561,7 @@ export class OptimizedPerformanceMonitor {
       silent: options.silent || false,
       trackMemory: options.trackMemory !== undefined ? options.trackMemory : true,
       enableNestedTracking: options.enableNestedTracking !== undefined ? options.enableNestedTracking : true,
-      threshold: options.threshold || 100,
+      threshold: options.threshold ?? 0,
       sampleRate: options.sampleRate !== undefined ? 
         Math.max(0, Math.min(1, options.sampleRate)) : 1.0 // Clamp between 0 and 1
     };
@@ -540,7 +571,8 @@ export class OptimizedPerformanceMonitor {
       silent: this.config.silent,
       showMemoryUsage: this.config.trackMemory,
       enableNestedTracking: this.config.enableNestedTracking,
-      threshold: this.config.threshold
+      threshold: this.config.threshold,
+      sampleRate: this.config.sampleRate
     });
   }
 
@@ -555,21 +587,12 @@ export class OptimizedPerformanceMonitor {
       throw new Error('First argument must be a function');
     }
     
-    // Merge global config with function-specific options
-    const trackingOptions = {
-      label: options.label || fn.name || 'anonymous',
-      trackingMode: options.trackingMode || this.config.trackingMode,
-      silent: options.hasOwnProperty('silent') ? options.silent : this.config.silent,
-      trackMemory: options.hasOwnProperty('trackMemory') ? options.trackMemory : this.config.trackMemory,
-      sampleRate: options.hasOwnProperty('sampleRate') ? options.sampleRate : this.config.sampleRate,
-      captureArgs: options.hasOwnProperty('captureArgs') ? options.captureArgs : false,
-      parentExecutionId: options.parentExecutionId || null,
-      thisContext: options.thisContext,
-      args: options.args
-    };
-    
-    // Use the tracker to directly track the function
-    return this.executionTracker.track(fn, trackingOptions);
+    // Only per-call options are passed down; anything left out falls back to
+    // this instance's *current* configuration when the call runs.
+    return this.executionTracker.track(fn, {
+      ...options,
+      label: options.label || fn.name || 'anonymous'
+    });
   }
 
   /**
@@ -586,18 +609,10 @@ export class OptimizedPerformanceMonitor {
       throw new Error('First argument must be a function');
     }
     
-    // Merge global config with function-specific options
-    const trackingOptions = {
-      label: options.label || fn.name || 'anonymous',
-      trackingMode: options.trackingMode || this.config.trackingMode,
-      silent: options.hasOwnProperty('silent') ? options.silent : this.config.silent,
-      trackMemory: options.hasOwnProperty('trackMemory') ? options.trackMemory : this.config.trackMemory,
-      sampleRate: options.hasOwnProperty('sampleRate') ? options.sampleRate : this.config.sampleRate,
-      captureArgs: options.hasOwnProperty('captureArgs') ? options.captureArgs : false,
-      parentExecutionId: options.parentExecutionId || null
-    };
-    
-    return this.executionTracker.createTrackable(fn, trackingOptions);
+    return this.executionTracker.createTrackable(fn, {
+      ...options,
+      label: options.label || fn.name || 'anonymous'
+    });
   }
 
   /**
@@ -611,17 +626,7 @@ export class OptimizedPerformanceMonitor {
       throw new Error('Module must be an object');
     }
     
-    // Merge global config with module-specific options
-    const trackingOptions = {
-      prefix: options.prefix || '',
-      trackingMode: options.trackingMode || this.config.trackingMode,
-      silent: options.hasOwnProperty('silent') ? options.silent : this.config.silent,
-      trackMemory: options.hasOwnProperty('trackMemory') ? options.trackMemory : this.config.trackMemory,
-      sampleRate: options.hasOwnProperty('sampleRate') ? options.sampleRate : this.config.sampleRate,
-      captureArgs: options.hasOwnProperty('captureArgs') ? options.captureArgs : false
-    };
-    
-    return this.executionTracker.trackModule(module, trackingOptions);
+    return this.executionTracker.trackModule(module, options);
   }
 
   /**
@@ -662,7 +667,8 @@ export class OptimizedPerformanceMonitor {
     
     // Update sampleRate if specified
     if (config.sampleRate !== undefined) {
-      this.config.sampleRate = Math.max(0, Math.min(1, config.sampleRate));
+      this.config.sampleRate = clampRate(config.sampleRate);
+      this.executionTracker.defaultSampleRate = this.config.sampleRate;
     }
     
     return { ...this.config };
@@ -725,7 +731,8 @@ export class OptimizedPerformanceMonitor {
    * @returns This instance for chaining
    */
   public setSampleRate(rate: number): OptimizedPerformanceMonitor {
-    this.config.sampleRate = Math.max(0, Math.min(1, rate));
+    this.config.sampleRate = clampRate(rate);
+    this.executionTracker.defaultSampleRate = this.config.sampleRate;
     return this;
   }
   
