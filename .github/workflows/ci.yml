@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [ main ]
+    # Pushing a tag like v1.2.3 runs every job and then publishes to npm
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
@@ -108,14 +110,23 @@ jobs:
     needs: [build, test, runtime, browser, other-runtimes]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # npm provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org/'
+      - name: Tag must match package.json version
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json $version"; exit 1
+          fi
       - run: npm ci
       - run: npm run build:all
-      - run: npm publish
+      - run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
