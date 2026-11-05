@@ -219,6 +219,7 @@ TracePerf now provides a consistent API across Node.js and browser environments:
 
 Example of cross-environment usage:
 
+<!-- docs:skip -->
 ```javascript
 // Node.js
 const { createTracePerf } = require('traceperf');
@@ -293,6 +294,8 @@ function transformData(data) {
     // Implementation
   }, { label: 'transformData' });
 }
+
+processData();
 ```
 
 Calling `processData()` prints a single tree once it finishes:
