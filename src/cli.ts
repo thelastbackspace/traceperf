@@ -164,10 +164,81 @@ export function report(text: string, options: ReportOptions = {}): string {
   return lines.join('\n');
 }
 
-const USAGE = `Usage: traceperf report <file> [--top N] [--sort total|mean|p95|max|count] [--json] [--html out.html]
+export interface CompareOptions {
+  /** Statistic to compare (default p95) */
+  metric?: 'mean' | 'p50' | 'p95' | 'p99' | 'max';
+  /** Percent increase that counts as a regression (default 10) */
+  threshold?: number;
+  /** Ignore changes smaller than this many ms (default 0.5) */
+  minDelta?: number;
+  /** Ignore labels with fewer calls than this in either run (default 1) */
+  minCalls?: number;
+  json?: boolean;
+}
+
+export interface CompareRow {
+  label: string;
+  before?: number;
+  after?: number;
+  changePct?: number;
+  status: 'regressed' | 'improved' | 'unchanged' | 'added' | 'removed' | 'skipped';
+}
+
+function statsOf(text: string): Record<string, LabelStats> {
+  const collector = new StatsCollector({ reservoirSize: 100000, maxLabels: 100000 });
+  parseCalls(text).forEach(c => collector.add(record(c.label, c.duration, c.selfDuration, c.error)));
+  return collector.all();
+}
+
+/** Compare two runs label by label */
+export function compare(beforeText: string, afterText: string, options: CompareOptions = {}): { rows: CompareRow[]; regressions: number; text: string } {
+  const metric = options.metric ?? 'p95';
+  const threshold = options.threshold ?? 10;
+  const minDelta = options.minDelta ?? 0.5;
+  const minCalls = options.minCalls ?? 1;
+  const before = statsOf(beforeText);
+  const after = statsOf(afterText);
+  const labels = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  const rows: CompareRow[] = labels.map(label => {
+    const b = before[label];
+    const a = after[label];
+    if (!b) return { label, after: a[metric], status: 'added' as const };
+    if (!a) return { label, before: b[metric], status: 'removed' as const };
+    if (b.count < minCalls || a.count < minCalls) return { label, before: b[metric], after: a[metric], status: 'skipped' as const };
+    const delta = a[metric] - b[metric];
+    const changePct = b[metric] > 0 ? (delta / b[metric]) * 100 : (delta > 0 ? Infinity : 0);
+    const status = Math.abs(delta) < minDelta ? 'unchanged'
+      : changePct > threshold ? 'regressed'
+        : changePct < -threshold ? 'improved' : 'unchanged';
+    return { label, before: b[metric], after: a[metric], changePct, status };
+  });
+  const order = { regressed: 0, improved: 1, added: 2, removed: 3, unchanged: 4, skipped: 5 };
+  rows.sort((x, y) => order[x.status] - order[y.status] || Math.abs(y.changePct ?? 0) - Math.abs(x.changePct ?? 0));
+  const regressions = rows.filter(r => r.status === 'regressed').length;
+  if (options.json) {
+    return { rows, regressions, text: JSON.stringify({ metric, threshold, regressions, rows }, null, 2) };
+  }
+  const fmt = (n?: number) => (n === undefined ? '-' : n.toFixed(3));
+  const pct = (r: CompareRow) => (r.changePct === undefined ? '' : `${r.changePct >= 0 ? '+' : ''}${Number.isFinite(r.changePct) ? r.changePct.toFixed(1) : '∞'}%`);
+  const table = [['label', `before ${metric}`, `after ${metric}`, 'change', 'status'],
+    ...rows.map(r => [r.label, fmt(r.before), fmt(r.after), pct(r), r.status])];
+  const widths = table[0].map((_, i) => Math.max(...table.map(row => row[i].length)));
+  const lines = table.map((row, ri) => row.map((cell, i) => (i === 0 || i === 4 ? cell.padEnd(widths[i]) : cell.padStart(widths[i]))).join('  ').trimEnd()
+    + (ri === 0 ? `\n${widths.map(w => '-'.repeat(w)).join('  ')}` : ''));
+  const summary = regressions
+    ? `${regressions} label${regressions === 1 ? '' : 's'} regressed by more than ${threshold}% (${metric}, ignoring changes < ${minDelta} ms)`
+    : `no regressions over ${threshold}% (${metric})`;
+  return { rows, regressions, text: `${lines.join('\n')}\n\n${summary}` };
+}
+
+const USAGE = `Usage:
+  traceperf report <file> [--top N] [--sort total|mean|p95|max|count] [--json] [--html out.html]
+  traceperf compare <before> <after> [--metric p95|p99|p50|mean|max] [--threshold 10]
+                    [--min-delta 0.5] [--min-calls 1] [--json] [--fail]
 
   <file>  a Chrome/Perfetto trace from startTrace().stop(), or JSON lines
-          from jsonLinesExporter(); "-" reads stdin`;
+          from jsonLinesExporter(); "-" reads stdin
+  compare --fail exits with code 1 when any label regressed (for CI)`;
 
 export function main(argv: string[], io: {
   readFile: (path: string) => string;
@@ -180,6 +251,9 @@ export function main(argv: string[], io: {
   if (!command || command === '--help' || command === '-h') {
     io.out(USAGE);
     return command ? 0 : 1;
+  }
+  if (command === 'compare') {
+    return runCompare(rest, io);
   }
   if (command !== 'report') {
     io.err(`traceperf: unknown command "${command}"\n\n${USAGE}`);
@@ -225,6 +299,44 @@ export function main(argv: string[], io: {
     }
     io.out(report(text, options));
     return 0;
+  } catch (error) {
+    io.err(`traceperf: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
+function runCompare(rest: string[], io: { readFile: (path: string) => string; out: (t: string) => void; err: (t: string) => void }): number {
+  const options: CompareOptions = {};
+  const files: string[] = [];
+  let fail = false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--json') options.json = true;
+    else if (arg === '--fail') fail = true;
+    else if (arg === '--metric') options.metric = rest[++i] as CompareOptions['metric'];
+    else if (arg === '--threshold') options.threshold = Number(rest[++i]);
+    else if (arg === '--min-delta') options.minDelta = Number(rest[++i]);
+    else if (arg === '--min-calls') options.minCalls = Number(rest[++i]);
+    else files.push(arg);
+  }
+  if (files.length !== 2) {
+    io.err(USAGE);
+    return 1;
+  }
+  if (options.metric && !['mean', 'p50', 'p95', 'p99', 'max'].includes(options.metric)) {
+    io.err('traceperf: --metric expects mean, p50, p95, p99 or max');
+    return 1;
+  }
+  for (const [flag, value] of [['--threshold', options.threshold], ['--min-delta', options.minDelta], ['--min-calls', options.minCalls]] as const) {
+    if (value !== undefined && !(value >= 0)) {
+      io.err(`traceperf: ${flag} expects a number`);
+      return 1;
+    }
+  }
+  try {
+    const result = compare(io.readFile(files[0]), io.readFile(files[1]), options);
+    io.out(result.text);
+    return fail && result.regressions > 0 ? 1 : 0;
   } catch (error) {
     io.err(`traceperf: ${error instanceof Error ? error.message : String(error)}`);
     return 1;

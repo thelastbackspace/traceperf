@@ -2,7 +2,7 @@
  * traceperf report CLI
  */
 import { createTracePerf, jsonLinesExporter } from '../index';
-import { main, parseCalls, report } from '../cli';
+import { compare, main, parseCalls, report } from '../cli';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -93,4 +93,42 @@ test('--html writes a self-contained report with one bar per call', async () => 
     expect(html).toContain('GET /users &gt; db.query');
     expect(html).toContain('#d73a49'); // failed calls are red
   }
+});
+
+function runLog(durations: Record<string, number[]>): string {
+  // Synthetic JSON lines: one root per call
+  return Object.entries(durations).flatMap(([label, ds]) => ds.map(d => JSON.stringify({
+    label, start: new Date(0).toISOString(), durationMs: d, selfMs: d, syncMs: d, async: false, children: [],
+  }))).join('\n');
+}
+
+test('compare flags regressions and improvements, ignores noise', () => {
+  const before = runLog({ 'db.query': [10, 10, 10, 10], render: [5, 5, 5, 5], tiny: [0.1, 0.1], gone: [1] });
+  const after = runLog({ 'db.query': [15, 15, 15, 15], render: [2, 2, 2, 2], tiny: [0.3, 0.3], fresh: [4] });
+  const result = compare(before, after);
+  const status = Object.fromEntries(result.rows.map(r => [r.label, r.status]));
+  expect(status).toEqual({ 'db.query': 'regressed', render: 'improved', tiny: 'unchanged', fresh: 'added', gone: 'removed' });
+  expect(result.regressions).toBe(1);
+  expect(result.text).toMatch(/db\.query\s+10\.000\s+15\.000\s+\+50\.0%\s+regressed/);
+  expect(result.text).toContain('1 label regressed by more than 10% (p95');
+  expect(compare(before, after, { threshold: 60 }).regressions).toBe(0);
+  expect(compare(before, after, { minCalls: 5 }).rows.find(r => r.label === 'db.query')!.status).toBe('skipped');
+});
+
+test('compare --fail exit code for CI', () => {
+  const files = {
+    a: runLog({ q: [10, 10] }),
+    b: runLog({ q: [20, 20] }),
+  } as Record<string, string>;
+  const run = (argv: string[]) => {
+    const out: string[] = [];
+    const code = main(argv, { readFile: p => files[p], readStdin: () => '', out: t => out.push(t), err: t => out.push(t) });
+    return { code, out: out.join('\n') };
+  };
+  expect(run(['compare', 'a', 'b']).code).toBe(0);
+  expect(run(['compare', 'a', 'b', '--fail']).code).toBe(1);
+  expect(run(['compare', 'a', 'a', '--fail']).code).toBe(0);
+  expect(JSON.parse(run(['compare', 'a', 'b', '--json']).out).regressions).toBe(1);
+  expect(run(['compare', 'a']).code).toBe(1);
+  expect(run(['compare', 'a', 'b', '--metric', 'bogus']).code).toBe(1);
 });
