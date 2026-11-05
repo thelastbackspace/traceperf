@@ -51,7 +51,7 @@
     "test": "jest",
     "lint": "eslint src --ext .ts --max-warnings 0",
     "format": "prettier --write \"src/**/*.ts\"",
-    "prepare": "husky install",
+    "prepare": "husky || true",
     "prepublishOnly": "npm run build:all",
     "dev": "tsc --watch",
     "verify:package": "node scripts/verify-package.js",
