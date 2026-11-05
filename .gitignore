@@ -137,3 +137,4 @@ wrapper-tracking-example.js
 test-results/
 playwright-report/
 traceperf-example-trace.json
+docs/api/

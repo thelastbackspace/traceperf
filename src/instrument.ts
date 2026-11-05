@@ -16,7 +16,8 @@ export interface InstrumentOptions extends Omit<TrackOptions, 'label'> {
   errorStatus?: number;
 }
 
-type Uninstall = () => void;
+/** Removes an instrumentation patch */
+export type Uninstall = () => void;
 
 function describeUrl(input: unknown): { method?: string; host: string; path: string } {
   try {

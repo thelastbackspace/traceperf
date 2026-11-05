@@ -1,0 +1,11 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts", "src/browser.ts"],
+  "out": "docs/api",
+  "name": "traceperf",
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "treatWarningsAsErrors": true,
+  "tsconfig": "tsconfig.json"
+}

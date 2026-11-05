@@ -32,6 +32,8 @@ jobs:
       run: npm run verify:docs
     - name: Overhead and bundle-size budgets
       run: npm run bench:check
+    - name: API reference builds without warnings
+      run: npm run docs:api
     - uses: actions/upload-artifact@v4
       with:
         name: dist

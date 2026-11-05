@@ -822,7 +822,8 @@ export class OptimizedExecutionTracker {
  */
 export type PerformanceMonitorOptions = TracePerfConfig;
 
-type MethodDecorator = (target: any, context?: any, descriptor?: PropertyDescriptor) => any;
+/** Decorator returned by `traced()`: works as a standard or legacy method decorator */
+export type TracedDecorator = (target: any, context?: any, descriptor?: PropertyDescriptor) => any;
 
 /**
  * Main performance monitoring interface
@@ -977,7 +978,7 @@ export class OptimizedPerformanceMonitor {
    *     async getUser(id: string) { ... }
    *   }
    */
-  public traced(options: TrackOptions = {}): MethodDecorator {
+  public traced(options: TrackOptions = {}): TracedDecorator {
     const trackables = new Map<string, Function>();
     const trackedFor = (fn: Function, label: string): Function => {
       let tracked = trackables.get(label);
