@@ -11,6 +11,7 @@
 import { ExecutionRecord } from './core/records';
 import { LabelStats, StatsCollector, formatStatsTable } from './core/stats';
 import { renderHtmlReport } from './report-html';
+import { createWatcher, WatchOptions } from './watch';
 
 export interface ReportOptions {
   top?: number;
@@ -238,7 +239,11 @@ const USAGE = `Usage:
 
   <file>  a Chrome/Perfetto trace from startTrace().stop(), or JSON lines
           from jsonLinesExporter(); "-" reads stdin
-  compare --fail exits with code 1 when any label regressed (for CI)`;
+  traceperf watch <calls.jsonl> [--top N] [--sort p95|p99|mean|total|count|max]
+                  [--interval ms] [--once]
+
+  compare --fail exits with code 1 when any label regressed (for CI)
+  watch follows a JSON-lines log as it grows; --once prints one frame`;
 
 export function main(argv: string[], io: {
   readFile: (path: string) => string;
@@ -254,6 +259,9 @@ export function main(argv: string[], io: {
   }
   if (command === 'compare') {
     return runCompare(rest, io);
+  }
+  if (command === 'watch') {
+    return runWatchOnce(rest, io);
   }
   if (command !== 'report') {
     io.err(`traceperf: unknown command "${command}"\n\n${USAGE}`);
@@ -343,11 +351,95 @@ function runCompare(rest: string[], io: { readFile: (path: string) => string; ou
   }
 }
 
+interface WatchArgs extends WatchOptions {
+  file?: string;
+  interval: number;
+  once: boolean;
+}
+
+export function parseWatchArgs(rest: string[]): WatchArgs | string {
+  const args: WatchArgs = { interval: 1000, once: false };
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--once') args.once = true;
+    else if (arg === '--top') args.top = Number(rest[++i]);
+    else if (arg === '--sort') args.sort = rest[++i] as WatchArgs['sort'];
+    else if (arg === '--interval') args.interval = Number(rest[++i]);
+    else if (!args.file) args.file = arg;
+    else return `unexpected argument "${arg}"`;
+  }
+  if (!args.file) return 'watch needs a JSON-lines file';
+  if (args.sort && !['p95', 'p99', 'mean', 'total', 'count', 'max'].includes(args.sort)) return '--sort expects p95, p99, mean, total, count or max';
+  if (args.top !== undefined && !(args.top >= 1)) return '--top expects a number';
+  if (!(args.interval >= 100)) return '--interval expects milliseconds (>= 100)';
+  return args;
+}
+
+/** `watch --once`: one frame from the whole file (the live loop is in the bin wiring) */
+function runWatchOnce(rest: string[], io: { readFile: (path: string) => string; out: (t: string) => void; err: (t: string) => void }): number {
+  const args = parseWatchArgs(rest);
+  if (typeof args === 'string') {
+    io.err(`traceperf: ${args}\n\n${USAGE}`);
+    return 1;
+  }
+  if (!args.once) {
+    io.err('traceperf: live watch needs a terminal; use --once for a single frame');
+    return 1;
+  }
+  try {
+    const watcher = createWatcher({ ...args, showRate: false });
+    watcher.ingest(io.readFile(args.file!) + '\n');
+    io.out(watcher.frame(`traceperf watch ${args.file}`));
+    return 0;
+  } catch (error) {
+    io.err(`traceperf: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
+/** Live loop: follow the file, redraw every interval */
+function watchLive(args: WatchArgs, fs: any): void {
+  const watcher = createWatcher(args);
+  const tty = !!(process.stdout && (process.stdout as any).isTTY);
+  let offset = 0;
+  const tick = () => {
+    let size = 0;
+    try {
+      size = fs.statSync(args.file).size;
+    } catch {
+      size = 0;
+    }
+    if (size < offset) {
+      watcher.reset(); // truncated or rotated
+      offset = 0;
+    }
+    if (size > offset) {
+      const fd = fs.openSync(args.file, 'r');
+      try {
+        const buffer = Buffer.alloc(size - offset);
+        fs.readSync(fd, buffer, 0, buffer.length, offset);
+        offset = size;
+        watcher.ingest(buffer.toString('utf8'));
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    const frame = watcher.frame(`traceperf watch ${args.file}`);
+    process.stdout.write(tty ? `\x1b[H\x1b[2J${frame}\n` : `${frame}\n\n`);
+  };
+  tick();
+  setInterval(tick, args.interval);
+}
+
 /* istanbul ignore next -- process wiring */
 if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require('fs');
-  process.exitCode = main(process.argv.slice(2), {
+  const argv = process.argv.slice(2);
+  const watchArgs = argv[0] === 'watch' ? parseWatchArgs(argv.slice(1)) : undefined;
+  if (watchArgs && typeof watchArgs !== 'string' && !watchArgs.once) {
+    watchLive(watchArgs, fs);
+  } else process.exitCode = main(argv, {
     readFile: path => fs.readFileSync(path, 'utf8'),
     readStdin: () => fs.readFileSync(0, 'utf8'),
     writeFile: (path, content) => fs.writeFileSync(path, content),
