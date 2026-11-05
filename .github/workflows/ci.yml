@@ -24,6 +24,9 @@ jobs:
       mongo:
         image: mongo:8
         ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       TRACEPERF_PG_URL: postgres://traceperf@127.0.0.1:5432/traceperf
       TRACEPERF_MONGO_URL: mongodb://127.0.0.1:27017
