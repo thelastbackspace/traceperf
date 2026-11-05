@@ -150,6 +150,56 @@ export const formatArg = (arg: unknown): string => {
   return text.length > MAX_ARG_LENGTH ? `${text.slice(0, MAX_ARG_LENGTH - 1)}…` : text;
 };
 
+/**
+ * Tracks which execution is "current" so nested tracked calls can find
+ * their parent. Uses AsyncLocalStorage on Node.js so the parent survives
+ * `await`; elsewhere falls back to a synchronous stack (children started
+ * after an `await` then become separate roots).
+ */
+interface ExecutionContext {
+  current(): string | null;
+  run<R>(executionId: string, fn: () => R): R;
+}
+
+const loadAsyncLocalStorage = (): (new () => any) | undefined => {
+  try {
+    const proc: any = typeof process !== 'undefined' ? process : undefined;
+    if (!proc || !proc.versions || !proc.versions.node) return undefined;
+    if (typeof proc.getBuiltinModule === 'function') {
+      return proc.getBuiltinModule('async_hooks')?.AsyncLocalStorage;
+    }
+    // Indirect require so browser bundlers don't try to bundle async_hooks
+    const req: ((id: string) => any) | undefined = typeof require === 'function' ? require : undefined;
+    return req ? req('async_hooks').AsyncLocalStorage : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const createExecutionContext = (): ExecutionContext => {
+  const AsyncLocalStorage = loadAsyncLocalStorage();
+  if (AsyncLocalStorage) {
+    const storage = new AsyncLocalStorage();
+    return {
+      current: () => storage.getStore() ?? null,
+      run: (executionId, fn) => storage.run(executionId, fn)
+    };
+  }
+  let current: string | null = null;
+  return {
+    current: () => current,
+    run: (executionId, fn) => {
+      const previous = current;
+      current = executionId;
+      try {
+        return fn();
+      } finally {
+        current = previous;
+      }
+    }
+  };
+};
+
 const clampRate = (rate: number): number => Math.max(0, Math.min(1, rate));
 
 const isNativePromise = (value: unknown): value is Promise<unknown> =>
@@ -162,6 +212,7 @@ export class OptimizedExecutionTracker {
   private executionTree: Record<string, ExecutionData> = {};
   private currentExecutionId: number = 0;
   private activeExecutions: Map<string, ExecutionData> = new Map();
+  private context: ExecutionContext = createExecutionContext();
   
   // Configuration
   public showMemoryUsage: boolean;
@@ -262,6 +313,7 @@ export class OptimizedExecutionTracker {
     }
     
     const execution = this.activeExecutions.get(executionId)!;
+    this.activeExecutions.delete(executionId);
     execution.endTime = getTimestamp();
     execution.duration = execution.endTime - execution.startTime;
     execution.result = result;
@@ -274,10 +326,15 @@ export class OptimizedExecutionTracker {
       execution.memoryDelta = execution.memoryAtEnd - (execution.memoryAtStart || 0);
     }
     
-    // Store in the execution tree
-    this.executionTree[executionId] = { ...execution };
+    // A child whose parent is still running is reported as part of the
+    // parent's tree once the parent finishes.
+    const parentRunning = execution.parentId !== null && this.activeExecutions.has(execution.parentId);
+    if (parentRunning) {
+      this.executionTree[executionId] = execution;
+      return execution;
+    }
     
-    // Generate flow chart if not silent and slow enough to report
+    // Root (or a child that outlived its parent): report the whole tree
     if (!execution.silent &&
         execution.trackingMode !== TrackingModes.PERFORMANCE &&
         this._meetsThreshold(execution)) {
@@ -285,7 +342,23 @@ export class OptimizedExecutionTracker {
       console.log(flowChart.replace(/\n$/, ''));
     }
     
+    // Release the finished tree so memory use does not grow with call count
+    this._release(execution);
+    
     return execution;
+  }
+
+  /**
+   * Drop a finished execution and its finished descendants
+   */
+  private _release(execution: ExecutionData): void {
+    delete this.executionTree[execution.id];
+    for (const childId of execution.children) {
+      const child = this.executionTree[childId];
+      if (child) {
+        this._release(child);
+      }
+    }
   }
 
   /**
@@ -342,9 +415,10 @@ export class OptimizedExecutionTracker {
     
     // Process children (skip in performance mode)
     if (execution.children && execution.children.length > 0) {
+      // Still-running children are reported on their own when they finish
       const childExecutions = execution.children
-        .map(childId => this.executionTree[childId] || this.activeExecutions.get(childId))
-        .filter(Boolean);
+        .map(childId => this.executionTree[childId])
+        .filter(child => child !== undefined && this._meetsThreshold(child));
         
       for (let i = 0; i < childExecutions.length; i++) {
         const isLast = i === childExecutions.length - 1;
@@ -376,7 +450,7 @@ export class OptimizedExecutionTracker {
     }
     
     const label = options.label || fn.name || 'anonymous';
-    const parentExecutionId = options.parentExecutionId || null;
+    const explicitParentId: string | null = options.parentExecutionId || null;
     const silent = options.silent ?? this.silent;
     const trackingMode = options.trackingMode || this.trackingMode;
     
@@ -398,6 +472,9 @@ export class OptimizedExecutionTracker {
         return fn.apply(thisArg, args);
       }
       
+      const nested = this.enableNestedTracking && options.enableNestedTracking !== false;
+      const parentExecutionId = explicitParentId ?? (nested ? this.context.current() : null);
+      
       // Start tracking the execution
       const executionId = this.startTimer(
         label,
@@ -414,8 +491,11 @@ export class OptimizedExecutionTracker {
       
       let result: ReturnType<T>;
       try {
-        // Execute the function with the caller's `this`
-        result = fn.apply(thisArg, args);
+        // Execute the function with the caller's `this`, as the current
+        // execution so nested tracked calls attach to it
+        result = nested ?
+          this.context.run(executionId, () => fn.apply(thisArg, args)) :
+          fn.apply(thisArg, args);
       } catch (error) {
         // Handle synchronous errors
         this.endTimer(executionId, undefined, error as Error);
