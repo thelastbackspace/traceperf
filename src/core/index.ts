@@ -5,3 +5,4 @@ export * from './exporters';
 export * from './event-loop';
 export * from './timeline';
 export * from './prometheus';
+export * from './allocations';
