@@ -12,6 +12,21 @@ jobs:
   # Lint, unit tests, package checks and docs on the current LTS.
   build:
     runs-on: ubuntu-latest
+    services:
+      # Real databases for the driver instrumentation tests
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: traceperf
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U traceperf" --health-interval 2s --health-timeout 5s --health-retries 20
+      mongo:
+        image: mongo:8
+        ports: ['27017:27017']
+    env:
+      TRACEPERF_PG_URL: postgres://traceperf@127.0.0.1:5432/traceperf
+      TRACEPERF_MONGO_URL: mongodb://127.0.0.1:27017
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4

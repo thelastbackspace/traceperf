@@ -27,6 +27,7 @@ export * from './types';
 export * from './core';
 export * from './integrations';
 export * from './instrument';
+export * from './drivers';
 export { OptimizedPerformanceMonitor };
 export { TrackingModes as TrackingMode };
 
