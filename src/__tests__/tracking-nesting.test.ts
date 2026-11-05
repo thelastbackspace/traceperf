@@ -74,10 +74,13 @@ describe('nested tracking', () => {
       tp.track(() => busyWait(0), { label: `${name}-child` });
     }, { label: name });
     await Promise.all([job('A', 10), job('B', 5)]);
-    const [first, second] = logs.lines();
-    expect(first).toMatch(/B: [\s\S]*B-child/);
-    expect(first).not.toContain('A-child');
-    expect(second).toMatch(/A: [\s\S]*A-child/);
+    // Finish order depends on timer scheduling under load; check by label
+    const treeA = logs.lines().find(l => l.startsWith('└─ A:'))!;
+    const treeB = logs.lines().find(l => l.startsWith('└─ B:'))!;
+    expect(treeA).toMatch(/A-child/);
+    expect(treeA).not.toContain('B-child');
+    expect(treeB).toMatch(/B-child/);
+    expect(treeB).not.toContain('A-child');
   });
 
   test('enableNestedTracking: false prints each call on its own', () => {
