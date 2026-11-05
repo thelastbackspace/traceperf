@@ -277,6 +277,7 @@ export class OptimizedExecutionTracker {
   /** Per-label statistics (null when disabled) */
   public stats: StatsCollector | null;
   private plugins: TracePerfPlugin[] = [];
+  private wrappers: TracePerfPlugin[] = [];
   private failedPlugins = new Set<TracePerfPlugin>();
 
   /**
@@ -303,9 +304,45 @@ export class OptimizedExecutionTracker {
    */
   public use(plugin: TracePerfPlugin): () => void {
     this.plugins = [...this.plugins, plugin];
+    this.wrappers = this.plugins.filter(p => typeof p.wrap === 'function');
     return () => {
       this.plugins = this.plugins.filter(p => p !== plugin);
+      this.wrappers = this.plugins.filter(p => typeof p.wrap === 'function');
     };
+  }
+
+  /**
+   * Run `run` inside every plugin's wrap() (first registered = outermost).
+   * A wrap() that throws before calling run is reported once and skipped.
+   */
+  private _wrap<R>(execution: ExecutionStart, run: () => R): R {
+    let next = run;
+    for (let i = this.wrappers.length - 1; i >= 0; i--) {
+      const plugin = this.wrappers[i];
+      const inner = next;
+      next = () => {
+        let ran = false;
+        const once = () => {
+          ran = true;
+          return inner();
+        };
+        try {
+          return plugin.wrap!(execution, once);
+        } catch (error) {
+          if (ran) throw error; // the tracked code itself threw
+          this._pluginFailed(plugin, 'wrap', error);
+          return inner();
+        }
+      };
+    }
+    return next();
+  }
+
+  private _pluginFailed(plugin: TracePerfPlugin, hook: string, error: unknown): void {
+    if (!this.failedPlugins.has(plugin)) {
+      this.failedPlugins.add(plugin);
+      console.warn(`traceperf: plugin ${plugin.name || '(unnamed)'} threw in ${hook}:`, error);
+    }
   }
 
   private _callPlugins(hook: 'onStart' | 'onComplete', payload: ExecutionStart | ExecutionRecord): void {
@@ -316,10 +353,7 @@ export class OptimizedExecutionTracker {
         fn.call(plugin, payload);
       } catch (error) {
         // Never let a plugin break the tracked code; warn once per plugin
-        if (!this.failedPlugins.has(plugin)) {
-          this.failedPlugins.add(plugin);
-          console.warn(`traceperf: plugin ${plugin.name || '(unnamed)'} threw in ${hook}:`, error);
-        }
+        this._pluginFailed(plugin, hook, error);
       }
     }
   }
@@ -381,7 +415,12 @@ export class OptimizedExecutionTracker {
     this.activeExecutions.set(executionId, execution);
 
     if (this.plugins.length > 0) {
-      this._callPlugins('onStart', { id: executionId, label: execution.label, parentId: parentExecutionId });
+      this._callPlugins('onStart', {
+        id: executionId,
+        label: execution.label,
+        parentId: parentExecutionId,
+        startEpochMs: EPOCH_OFFSET_MS + startTime / 1000000
+      });
     }
 
     return executionId;
@@ -570,9 +609,15 @@ export class OptimizedExecutionTracker {
     try {
       // Execute the function with the caller's `this`, as the current
       // execution so nested tracked calls attach to it
-      result = nested ?
-        this.context.apply(executionId, fn, thisArg, args) :
-        fn.apply(thisArg, args);
+      if (this.wrappers.length > 0) {
+        result = this._wrap({ id: executionId, label, parentId: parentExecutionId }, () => (nested ?
+          this.context.apply(executionId, fn, thisArg, args) :
+          fn.apply(thisArg, args)));
+      } else {
+        result = nested ?
+          this.context.apply(executionId, fn, thisArg, args) :
+          fn.apply(thisArg, args);
+      }
     } catch (error) {
       // Handle synchronous errors
       this.endTimer(executionId, undefined, error as Error);
@@ -673,7 +718,10 @@ export class OptimizedExecutionTracker {
         }
       },
       run: <R>(fn: () => R): R => {
-        const result = nested ? this.context.run(executionId, fn) : fn();
+        const runInContext = () => (nested ? this.context.run(executionId, fn) : fn());
+        const result = this.wrappers.length > 0 ?
+          this._wrap({ id: executionId, label: label || 'anonymous', parentId: parentExecutionId }, runInContext) :
+          runInContext();
         // The span's synchronous part ends when its first run() returns
         const execution = this.activeExecutions.get(executionId);
         if (execution && execution.syncEndTime === undefined) {

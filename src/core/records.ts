@@ -147,6 +147,8 @@ export interface ExecutionStart {
   id: string;
   label: string;
   parentId: string | null;
+  /** Start time as a Unix epoch timestamp in ms (set for onStart) */
+  startEpochMs?: number;
 }
 
 /**
@@ -161,4 +163,9 @@ export interface TracePerfPlugin {
   onStart?(execution: ExecutionStart): void;
   /** A top-level call finished; `root` holds the whole tree */
   onComplete?(root: ExecutionRecord): void;
+  /**
+   * Run the tracked code inside something (e.g. an active OpenTelemetry
+   * span). Must call `run` exactly once and return its result.
+   */
+  wrap?<R>(execution: ExecutionStart, run: () => R): R;
 }

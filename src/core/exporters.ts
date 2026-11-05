@@ -139,6 +139,7 @@ export interface OtelSpanLike {
   recordException(exception: unknown): unknown;
   setStatus(status: { code: number; message?: string }): unknown;
   end(endTime?: number): unknown;
+  updateName?(name: string): unknown;
 }
 export interface OtelTracerLike {
   startSpan(name: string, options?: { startTime?: number }, context?: unknown): OtelSpanLike;
@@ -148,25 +149,90 @@ export interface OtelApiLike {
     getTracer(name: string, version?: string): OtelTracerLike;
     setSpan(context: unknown, span: OtelSpanLike): unknown;
   };
-  context: { active(): unknown };
+  context: {
+    active(): unknown;
+    /** Needed for live mode */
+    with?<R>(context: unknown, fn: () => R): R;
+  };
 }
 
 /** OpenTelemetry status code for errors (SpanStatusCode.ERROR) */
 const OTEL_STATUS_ERROR = 2;
 
+export interface OpenTelemetryExporterOptions {
+  /** Tracer name (default "traceperf") */
+  tracerName?: string;
+  /** Use this tracer instead of api.trace.getTracer() */
+  tracer?: OtelTracerLike;
+  /**
+   * Live mode: open each span when the call starts and make it the active
+   * OpenTelemetry context while the call runs, so spans created by other
+   * instrumentation (HTTP clients, database drivers) nest under it.
+   * Requires a context manager to be registered (as any OTel SDK setup does).
+   */
+  live?: boolean;
+}
+
+function decorateSpan(span: OtelSpanLike, record: ExecutionRecord): void {
+  span.setAttribute('traceperf.self_ms', record.selfDuration);
+  span.setAttribute('traceperf.sync_ms', record.syncDuration);
+  span.setAttribute('traceperf.async', record.async);
+  if (record.memoryDelta !== undefined) span.setAttribute('traceperf.memory_delta_bytes', record.memoryDelta);
+  if (record.args && record.args.length) span.setAttribute('traceperf.args', record.args.join(', '));
+  if (record.error !== undefined && record.error !== null) {
+    span.recordException(record.error);
+    span.setStatus({
+      code: OTEL_STATUS_ERROR,
+      message: record.error instanceof Error ? record.error.message : String(record.error),
+    });
+  }
+}
+
 /**
- * Export finished calls as OpenTelemetry spans.
+ * Export tracked calls as OpenTelemetry spans.
  *
  *   import * as otel from '@opentelemetry/api';
- *   tp.use(openTelemetryExporter(otel));
+ *   tp.use(openTelemetryExporter(otel));                 // spans created when the tree finishes
+ *   tp.use(openTelemetryExporter(otel, { live: true })); // spans active while the call runs
  *
- * Spans are created when the top-level call finishes, with the real start
- * and end times and parent/child links. Each top-level span is parented to
- * the OpenTelemetry context that was active when the call started, so it
- * joins the surrounding request trace.
+ * Default mode creates spans when the top-level call finishes, with the
+ * real start/end times, parented to the OpenTelemetry context that was
+ * active when the call started. Live mode opens each span when the call
+ * starts and makes it the active context, so other instrumentation's spans
+ * become its children.
  */
-export function openTelemetryExporter(api: OtelApiLike, options: { tracerName?: string; tracer?: OtelTracerLike } = {}): TracePerfPlugin {
+export function openTelemetryExporter(api: OtelApiLike, options: OpenTelemetryExporterOptions = {}): TracePerfPlugin {
   const tracer = options.tracer ?? api.trace.getTracer(options.tracerName ?? 'traceperf');
+
+  if (options.live) {
+    if (typeof api.context.with !== 'function') {
+      throw new Error('openTelemetryExporter: live mode needs api.context.with (pass @opentelemetry/api)');
+    }
+    const spans = new Map<string, OtelSpanLike>();
+    return {
+      name: 'opentelemetry-live',
+      onStart(execution) {
+        // Inside a tracked parent, wrap() has made the parent span active
+        spans.set(execution.id, tracer.startSpan(execution.label, { startTime: execution.startEpochMs }, api.context.active()));
+      },
+      wrap(execution, run) {
+        const span = spans.get(execution.id);
+        if (!span) return run();
+        return api.context.with!(api.trace.setSpan(api.context.active(), span), run);
+      },
+      onComplete(root) {
+        walkRecords(root, record => {
+          const span = spans.get(record.id);
+          if (!span) return;
+          spans.delete(record.id);
+          if (span.updateName) span.updateName(record.label);
+          decorateSpan(span, record);
+          span.end(record.startEpochMs + record.duration);
+        });
+      },
+    };
+  }
+
   const startContexts = new Map<string, unknown>();
   return {
     name: 'opentelemetry',
@@ -178,18 +244,7 @@ export function openTelemetryExporter(api: OtelApiLike, options: { tracerName?: 
       startContexts.delete(root.id);
       const emit = (record: ExecutionRecord, ctx: unknown) => {
         const span = tracer.startSpan(record.label, { startTime: record.startEpochMs }, ctx);
-        span.setAttribute('traceperf.self_ms', record.selfDuration);
-        span.setAttribute('traceperf.sync_ms', record.syncDuration);
-        span.setAttribute('traceperf.async', record.async);
-        if (record.memoryDelta !== undefined) span.setAttribute('traceperf.memory_delta_bytes', record.memoryDelta);
-        if (record.args && record.args.length) span.setAttribute('traceperf.args', record.args.join(', '));
-        if (record.error !== undefined && record.error !== null) {
-          span.recordException(record.error);
-          span.setStatus({
-            code: OTEL_STATUS_ERROR,
-            message: record.error instanceof Error ? record.error.message : String(record.error),
-          });
-        }
+        decorateSpan(span, record);
         const childCtx = api.trace.setSpan(ctx, span);
         record.children.forEach(child => emit(child, childCtx));
         span.end(record.startEpochMs + record.duration);
