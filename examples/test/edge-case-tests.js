@@ -9,8 +9,9 @@
  * 5. Error propagation in complex promise chains
  */
 
-// Import the final optimized implementation
-const { tracePerf, TrackingMode } = require('./traceperf-final.js');
+// Import the built library (run `npm run build` first)
+const tracePerf = require('../../dist');
+const { TrackingMode } = tracePerf;
 
 // Configure for testing
 tracePerf.setConfig({

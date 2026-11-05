@@ -87,32 +87,23 @@ asyncExample().then(() => {
   // Example 5: Tracking nested function calls
   console.log('\n--- Example 5: Nested Function Calls ---');
   
-  function outer() {
-    const result1 = middle();
-    const result2 = add(result1, 5);
-    return result2;
-  }
-  
-  function middle() {
-    return inner() * 2;
-  }
-  
-  function inner() {
+  // Nested tracking works when tracked functions call other *tracked*
+  // functions: create the tracked versions and call those.
+  const trackedInner = balancedTracker.createTrackable(function inner() {
     // Simulate some work
     const start = Date.now();
     while (Date.now() - start < 30) {}
     return 10;
-  }
+  }, { label: 'inner' });
   
-  // Create trackable versions
-  const trackedOuter = balancedTracker.createTrackable(outer, { label: 'outer' });
-  const trackedMiddle = balancedTracker.createTrackable(middle, { label: 'middle' });
-  const trackedInner = balancedTracker.createTrackable(inner, { label: 'inner' });
+  const trackedMiddle = balancedTracker.createTrackable(function middle() {
+    return trackedInner() * 2;
+  }, { label: 'middle' });
   
-  // Replace the original functions to enable nested tracking
-  global.middle = trackedMiddle;
-  global.inner = trackedInner;
-  global.add = trackedAdd;
+  const trackedOuter = balancedTracker.createTrackable(function outer() {
+    const result1 = trackedMiddle();
+    return trackedAdd(result1, 5);
+  }, { label: 'outer' });
   
   // Execute the outer function which will call the others
   const nestedResult = trackedOuter();
