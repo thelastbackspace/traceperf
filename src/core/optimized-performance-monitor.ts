@@ -34,8 +34,7 @@ export const getMemoryUsage = (): number => {
   }
   // Browser memory API if available
   else if (typeof performance !== 'undefined' && 'memory' in performance) {
-    // @ts-expect-error This is a browser-specific check
-    return window.performance.memory?.usedJSHeapSize || 0;
+    return (performance as any).memory?.usedJSHeapSize || 0;
   }
   // Fallback when no memory API available
   return 0;
@@ -108,6 +107,43 @@ export interface ExecutionData {
   error?: Error | null;
 }
 
+const MAX_ARG_LENGTH = 50;
+
+/**
+ * Render one captured argument as a short, safe string.
+ * Never throws and never walks large structures in full.
+ */
+export const formatArg = (arg: unknown): string => {
+  let text: string;
+  try {
+    if (typeof arg === 'string') {
+      text = JSON.stringify(arg.length > MAX_ARG_LENGTH ? arg.slice(0, MAX_ARG_LENGTH) : arg);
+    } else if (typeof arg === 'function') {
+      text = `[Function ${arg.name || 'anonymous'}]`;
+    } else if (Array.isArray(arg)) {
+      text = `Array(${arg.length})`;
+    } else if (arg !== null && typeof arg === 'object') {
+      const keys = Object.keys(arg);
+      if (keys.length <= 5) {
+        text = JSON.stringify(arg);
+      } else {
+        const name = (arg as object).constructor?.name || 'Object';
+        text = `${name}{${keys.length} keys}`;
+      }
+    } else {
+      text = String(arg);
+    }
+  } catch {
+    // circular structures, null prototypes, throwing getters/toJSON, ...
+    const name = (arg as any)?.constructor?.name;
+    text = typeof name === 'string' && name ? `[${name}]` : '[object]';
+  }
+  return text.length > MAX_ARG_LENGTH ? `${text.slice(0, MAX_ARG_LENGTH - 1)}…` : text;
+};
+
+const isNativePromise = (value: unknown): value is Promise<unknown> =>
+  value instanceof Promise || Object.prototype.toString.call(value) === '[object Promise]';
+
 /**
  * Optimized tracker for individual function executions
  */
@@ -169,7 +205,7 @@ export class OptimizedExecutionTracker {
       parentId: parentExecutionId,
       children: [],
       args: options.captureArgs && options.args ? 
-        Array.from(options.args).map(arg => String(arg).substring(0, 50)) : [],
+        Array.from(options.args).map(formatArg) : [],
       complete: false
     };
     
@@ -256,7 +292,8 @@ export class OptimizedExecutionTracker {
     // Format the execution line based on tracking mode
     const durationStr = (execution.duration / 1000000).toFixed(3);
     const formatters = this._formatters;
-    let line = `${formatters.indent.repeat(depth)}${isLastChild ? formatters.lastChildPrefix : formatters.childPrefix}${execution.label}: ${durationStr} ms`;
+    const argsStr = execution.args && execution.args.length > 0 ? `(${execution.args.join(', ')})` : '';
+    let line = `${formatters.indent.repeat(depth)}${isLastChild ? formatters.lastChildPrefix : formatters.childPrefix}${execution.label}${argsStr}: ${durationStr} ms`;
     
     // Add memory usage if enabled and in detailed modes
     if (this.showMemoryUsage && 
@@ -269,7 +306,8 @@ export class OptimizedExecutionTracker {
     
     // Add error indicator
     if (execution.error && (this.trackingMode === TrackingModes.DETAILED || this.trackingMode === TrackingModes.DEBUG)) {
-      line += ` ${formatters.errorMarker}${execution.error.message}`;
+      const error: any = execution.error;
+      line += ` ${formatters.errorMarker}${error instanceof Error ? error.message : String(error)}`;
     }
     
     flowChart += line + '\n';
@@ -323,14 +361,13 @@ export class OptimizedExecutionTracker {
       return fn;
     }
     
-    // Create the tracked function using arrow function to preserve 'this'
-    const trackedFn = (...args: Parameters<T>): ReturnType<T> => {
+    const invoke = (thisArg: unknown, args: Parameters<T>): ReturnType<T> => {
       // Apply sampling - randomly decide whether to track this call
       const shouldSample = Math.random() < sampleRate;
       
       // If not sampling this call, just execute the function directly
       if (!shouldSample) {
-        return fn.apply(this, args);
+        return fn.apply(thisArg, args);
       }
       
       // Start tracking the execution
@@ -344,31 +381,40 @@ export class OptimizedExecutionTracker {
         }
       );
       
+      let result: ReturnType<T>;
       try {
-        // Execute the function with correct this context
-        const result = fn.apply(this, args);
-        
-        // Handle promises
-        if (result && typeof result.then === 'function') {
-          return result
-            .then((resolvedValue: any) => {
-              this.endTimer(executionId, resolvedValue);
-              return resolvedValue;
-            })
-            .catch((error: Error) => {
-              this.endTimer(executionId, undefined, error);
-              throw error; // Re-throw to preserve error behavior
-            }) as ReturnType<T>;
-        }
-        
-        // Handle synchronous functions
-        this.endTimer(executionId, result);
-        return result;
+        // Execute the function with the caller's `this`
+        result = fn.apply(thisArg, args);
       } catch (error) {
         // Handle synchronous errors
         this.endTimer(executionId, undefined, error as Error);
         throw error; // Re-throw to preserve error behavior
       }
+      
+      // Native promises (incl. async functions): time until settled.
+      // Other thenables are returned untouched - calling their then() could
+      // trigger side effects (e.g. query builders) or change their type.
+      if (isNativePromise(result)) {
+        return result.then(
+          (resolvedValue: unknown) => {
+            this.endTimer(executionId, resolvedValue);
+            return resolvedValue;
+          },
+          (error: unknown) => {
+            this.endTimer(executionId, undefined, error as Error);
+            throw error; // Re-throw to preserve error behavior
+          }
+        ) as ReturnType<T>;
+      }
+      
+      // Handle synchronous functions
+      this.endTimer(executionId, result);
+      return result;
+    };
+    
+    // A regular function (not an arrow) so callers keep their own `this`
+    const trackedFn = function (this: unknown, ...args: Parameters<T>): ReturnType<T> {
+      return invoke(this, args);
     };
     
     // Preserve function properties
@@ -434,7 +480,7 @@ export class OptimizedExecutionTracker {
   public track<T>(fn: () => T, options: Record<string, any> = {}): T {
     // Create a trackable version and call it immediately
     const trackableFn = this.createTrackable(fn, options);
-    return trackableFn.apply(options.thisContext || this, options.args || []);
+    return trackableFn.apply(options.thisContext, options.args || []);
   }
 
   /**
