@@ -1,0 +1,12 @@
+{
+  "name": "traceperf-playground",
+  "private": true,
+  "description": "Find the slow part of an Express endpoint with traceperf",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "traceperf": "^1.1.0"
+  }
+}
