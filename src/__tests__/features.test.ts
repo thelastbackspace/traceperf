@@ -298,6 +298,9 @@ describe('ergonomics', () => {
     expect(roots).toHaveLength(1);
     expect(roots[0].label).toBe('GET /users/:id');
     expect(roots[0].children.map(c => c.label)).toEqual(['db.query']);
+    // run() returned a promise right away: the span's sync part is tiny
+    expect(roots[0].async).toBe(true);
+    expect(roots[0].syncDuration).toBeLessThan(roots[0].duration);
   });
 
   test('start() is a no-op span when disabled', () => {

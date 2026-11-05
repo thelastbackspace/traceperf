@@ -672,7 +672,15 @@ export class OptimizedExecutionTracker {
           execution.label = newLabel;
         }
       },
-      run: <R>(fn: () => R): R => (nested ? this.context.run(executionId, fn) : fn()),
+      run: <R>(fn: () => R): R => {
+        const result = nested ? this.context.run(executionId, fn) : fn();
+        // The span's synchronous part ends when its first run() returns
+        const execution = this.activeExecutions.get(executionId);
+        if (execution && execution.syncEndTime === undefined) {
+          execution.syncEndTime = getTimestamp();
+        }
+        return result;
+      },
       end: (error?: unknown) => {
         if (ended) return;
         ended = true;
