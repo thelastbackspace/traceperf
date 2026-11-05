@@ -11,8 +11,9 @@
 - **Honest numbers.** You get total, self and synchronous time for each call. Detailed mode flags calls that blocked the event loop.
 - **Production-ready.** Stats are bounded per label (p50/p95/p99), sampling is built in, and `enabled: false` makes tracking a pass-through costing ~40 ns.
 - **Gets data out.** Chrome/Perfetto traces, OpenTelemetry spans, JSON lines, or your own `onComplete` hook.
-- **Zero-effort coverage.** One line tracks every `fetch`, HTTP request, database call or Prisma query.
-- **Fits your stack.** Express, Fastify, Hono, Next.js route handlers, decorators, CommonJS, ESM, TypeScript, browsers, Node.js 14+, Bun and Deno. There are no runtime dependencies.
+- **Zero-effort coverage.** One line tracks every `fetch`, HTTP request or query, for pg, mysql2, MongoDB/Mongoose, ioredis, Prisma and the AWS SDK.
+- **Built for teams.** It feeds Prometheus, catches regressions in CI (`traceperf compare --fail`), shows up in Chrome DevTools, and produces HTML flame-chart reports.
+- **Fits your stack.** Express, Fastify, Hono, Koa, NestJS, Next.js route handlers, decorators, CommonJS, ESM, TypeScript, browsers, Node.js 14+, Bun, Deno, Cloudflare Workers and Vercel Edge. There are no runtime dependencies.
 
 Try it in the browser: [the playground](examples/playground) is an Express API with a hidden N+1 query problem.
 
@@ -126,17 +127,22 @@ await tp.track(async () => { await new Db().query('SELECT * FROM users'); }, { l
   └─ db SELECT: 0.031 ms
 ```
 
-Recipes for real drivers:
+Ready-made helpers for popular clients. Pass the module you already use; traceperf doesn't depend on any of them:
 
 <!-- docs:skip -->
 ```javascript
-instrumentMethods(tp, require('pg').Client.prototype, ['query'], {
-  labelFor: (_m, [q]) => `pg ${String(q?.text ?? q).trim().split(/\s+/)[0]}`,
-});
-instrumentMethods(tp, require('ioredis').prototype, ['get', 'set', 'del'], { prefix: 'redis.' });
+const { instrumentPg, instrumentMysql2, instrumentMongo, instrumentRedis, instrumentAwsClient, prismaExtension } = require('traceperf');
 
+instrumentPg(tp, require('pg'));                    // "pg SELECT users" (Pool.query included)
+instrumentMysql2(tp, require('mysql2'));            // "mysql UPDATE orders" (callback and promise APIs)
+instrumentMongo(tp, require('mongodb'));            // "mongo find users", "mongo insertOne users"
+instrumentMongo(tp, require('mongoose').mongo);     // Mongoose uses its own copy of the driver
+instrumentRedis(tp, require('ioredis'));            // "redis GET"
+instrumentAwsClient(tp, s3Client);                  // "aws S3.GetObject"
 const prisma = new PrismaClient().$extends(prismaExtension(tp)); // "prisma.User.findMany"
 ```
+
+SQL labels are the verb plus the first table (`sqlLabel()`), never the values, so stats stay grouped. These are tested against the real client libraries, with Postgres and MongoDB running for real.
 
 `fetch` timing ends when the response headers arrive. `http` timing ends when the body has been read. Responses with status ≥ 500 mark the call failed.
 
@@ -325,6 +331,38 @@ Each finished tree becomes spans with the real start and end times, parent/child
 
 **Live mode** (`openTelemetryExporter(otel, { live: true })`) opens each span when the call starts and makes it the active context while the call runs, across `await`. Spans created by your other instrumentation (pg, http, Redis) then appear inside traceperf's spans.
 
+### Prometheus
+
+```javascript
+const { createTracePerf, prometheusExporter } = require('traceperf');
+
+const prom = prometheusExporter();
+const tp = createTracePerf({ silent: true, plugins: [prom] });
+tp.track(() => JSON.stringify({ ok: true }), { label: 'serialize' });
+
+// app.get('/metrics', prom.handler);
+console.log(prom.metrics().split('\n').filter(l => l.includes('_count')).join('\n'));
+```
+
+```
+traceperf_call_duration_seconds_count{name="serialize"} 1
+```
+
+This exposes a `traceperf_call_duration_seconds` histogram and a `traceperf_call_errors_total` counter per label. Use `rootsOnly: true` for request-level metrics only.
+
+### Slow-call alerts
+
+```javascript
+const { createTracePerf } = require('traceperf');
+const tp = createTracePerf({ silent: true });
+
+tp.onSlow({ 'db.query': 50, '*': 500 }, (call, root) => {
+  console.warn(`slow: ${call.label} took ${call.duration.toFixed(0)} ms (in ${root.label})`);
+});
+```
+
+`onSlow` checks every call in each finished tree, nested ones included, in every mode.
+
 ### Hooks, JSON lines and custom output
 
 ```javascript
@@ -353,12 +391,14 @@ One tree per request, labelled by route pattern, with everything tracked during 
 
 <!-- docs:skip -->
 ```javascript
-const { createTracePerf, expressMiddleware, fastifyPlugin, honoMiddleware, withTracing } = require('traceperf');
+const { createTracePerf, expressMiddleware, fastifyPlugin, honoMiddleware, koaMiddleware, nestInterceptor, withTracing } = require('traceperf');
 const tp = createTracePerf({ threshold: 100 }); // print only slow requests
 
 app.use(expressMiddleware(tp));                      // Express / Connect
 await fastify.register(fastifyPlugin(tp));           // Fastify
 app.use('*', honoMiddleware(tp));                    // Hono
+app.use(koaMiddleware(tp));                          // Koa
+nestApp.useGlobalInterceptors(nestInterceptor(tp));  // NestJS
 export const GET = withTracing(tp, async (req) => {  // Next.js route handlers, any fetch-style handler
   return Response.json(await loadUsers());
 });
@@ -413,6 +453,51 @@ Slowest 5 calls:
 
 Add `--json` for machine-readable output. A file of `-` reads stdin.
 
+### Comparing runs: `traceperf compare`
+
+Record a JSON-lines log before and after a change (or on `main` and on a PR), then:
+
+```bash
+npx traceperf compare before.jsonl after.jsonl --metric p95 --threshold 10 --fail
+```
+
+```
+label       before p95  after p95  change  status
+----------  ----------  ---------  ------  ---------
+db.query         4.741      8.795  +85.5%  regressed
+render           1.886      1.966   +4.2%  unchanged
+```
+
+`--fail` exits with code 1 when anything regressed, so it can gate CI. Changes under `--min-delta` (0.5 ms by default) are ignored, so tiny functions don't fail builds on noise.
+
+### Reports and live view
+
+```bash
+npx traceperf report trace.json --html report.html   # one self-contained file: flame chart, stats, slowest calls
+npx traceperf watch calls.jsonl                      # live top-style view while the app writes the log
+```
+
+### Allocation profiling
+
+The `📊` heap delta is a hint. For real numbers, profile the allocations of a function:
+
+```javascript
+const { profileAllocations } = require('traceperf');
+
+const { allocatedBytes, sites } = await profileAllocations(() => {
+  const rows = [];
+  for (let i = 0; i < 10000; i++) rows.push({ id: i, label: `row ${i}` });
+  return rows.length;
+});
+console.log(allocatedBytes > 0, typeof sites[0].functionName); // allocated bytes and the top allocation sites
+```
+
+```
+true string
+```
+
+This uses V8's sampling heap profiler through `node:inspector` and counts objects that were collected again (on Node 20+, see `countsCollected`).
+
 ### Event-loop delay
 
 ```javascript
@@ -462,6 +547,29 @@ Without a bundler, use the script-tag build (`dist/traceperf.browser.min.js`, ab
 
 Memory deltas are shown only where the browser exposes `performance.memory` (Chromium).
 
+### In Chrome DevTools
+
+```javascript
+import { createTracePerf, performanceTimeline } from 'traceperf/browser';
+
+const tp = createTracePerf({ silent: true, plugins: [performanceTimeline()] });
+tp.track(() => [3, 1, 2].sort(), { label: 'sortItems' });
+```
+
+Every tracked call becomes a `performance.measure()` entry. In Chrome 129+ these appear on a **traceperf** track in the Performance panel, with failed calls in red and duration, self and sync time in the tooltip. Elsewhere (including Node.js) they appear as User Timing entries. Entries are cleared after emitting, so long-running pages don't accumulate them; DevTools recordings still capture them.
+
+### Edge runtimes
+
+Cloudflare Workers and Vercel Edge work as-is. Nesting across `await` uses `AsyncLocalStorage`, which traceperf detects automatically where it is a global (Next.js Edge, Workers with `nodejs_compat`). Anywhere else, pass it in:
+
+<!-- docs:skip -->
+```javascript
+import { AsyncLocalStorage } from 'node:async_hooks';
+const tp = createTracePerf({ asyncLocalStorage: AsyncLocalStorage });
+```
+
+Workers deliberately coarsen timers (time only advances on I/O), so durations there are only approximate.
+
 ## How it compares
 
 | | Call tree | Async-aware nesting | Per-label stats | Production use | Export | Setup |
@@ -476,7 +584,7 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 
 ## Compatibility
 
-- **Node.js** 14+ (tested on 14, 16, 18, 20, 22 and 24), **Bun** and **Deno** (nesting across `await` works on all three), plus current Chromium, Firefox and WebKit.
+- **Node.js** 14+ (tested on 14, 16, 18, 20, 22 and 24), **Bun**, **Deno**, **Cloudflare Workers** (workerd) and **Vercel Edge** (edge-runtime). Nesting across `await` works on all of them. Also tested in current Chromium, Firefox and WebKit.
 - **Module formats:** CommonJS (`require`), ESM (`import`), TypeScript (`node10`, `node16`/`nodenext` and `bundler` resolution), bundlers (esbuild, webpack, Vite, ...), and `<script>`.
 - **Runtime dependencies:** none.
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - Unreleased
+
+### Added
+- **Database and cloud clients:** `instrumentPg`, `instrumentMysql2`, `instrumentMongo` (also works for Mongoose via `mongoose.mongo`), `instrumentRedis` (ioredis) and `instrumentAwsClient` (AWS SDK v3). Labels look like `pg SELECT users` or `aws S3.GetObject`. `sqlLabel()` builds low-cardinality SQL labels.
+- **Frameworks:** `koaMiddleware` and `nestInterceptor` (no dependency on Nest or rxjs).
+- `performanceTimeline()`: tracked calls appear on a custom track in the Chrome DevTools Performance panel (User Timing everywhere else).
+- **`traceperf report --html`:** a self-contained flame-chart report.
+- **`traceperf compare before after [--fail]`:** label-by-label regression check for CI.
+- **`traceperf watch calls.jsonl`:** a live, top-style terminal view.
+- `onSlow(threshold | { label: ms, '*': ms }, listener)`: slow-call alerts.
+- `prometheusExporter()`: a duration histogram and an error counter per label, with an HTTP handler.
+- `profileAllocations(fn)`: real allocated bytes and top allocation sites via V8's sampling heap profiler. Includes collected objects on Node 20+.
+- **Edge runtimes:** `AsyncLocalStorage` is detected as a global, and a new `asyncLocalStorage` option accepts the class explicitly. Verified on Cloudflare Workers (workerd) and Vercel Edge (edge-runtime).
+- `traceperf/browser` also exports `performanceTimeline`, `instrumentFetch`, the exporters and `formatTree`.
+
+### Development
+- CI runs Postgres and MongoDB service containers for the driver tests, plus Cloudflare workerd and edge-runtime jobs.
+
 ## [1.1.0] - Unreleased
 
 ### Added
