@@ -36,6 +36,16 @@ describe('nested tracking', () => {
     expect(lines[2]).toMatch(/^ {4}└─ transformData: /);
   });
 
+  test('tree connectors show which parent a grandchild belongs to', () => {
+    const tp = createTracePerf({ trackMemory: false });
+    const inner = tp.createTrackable(() => 1, { label: 'inner' });
+    const middle = tp.createTrackable(() => inner(), { label: 'middle' });
+    const last = tp.createTrackable(() => 2, { label: 'last' });
+    tp.track(() => middle() + last(), { label: 'outer' });
+    const lines = logs.lines()[0].split('\n').map(l => l.replace(/: .*/, ''));
+    expect(lines).toEqual(['└─ outer', '  ├─ middle', '  │ └─ inner', '  └─ last']);
+  });
+
   test('children awaited after an await are attached to the right parent', async () => {
     const tp = createTracePerf({ enableNestedTracking: true, trackMemory: false });
     const fetchData = () => tp.track(async () => {

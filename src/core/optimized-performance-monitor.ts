@@ -413,7 +413,9 @@ export class OptimizedExecutionTracker {
     const durationStr = (execution.duration / 1000000).toFixed(3);
     const formatters = this._formatters;
     const argsStr = execution.args && execution.args.length > 0 ? `(${execution.args.join(', ')})` : '';
-    let line = `${formatters.indent.repeat(depth)}${isLastChild ? formatters.lastChildPrefix : formatters.childPrefix}${execution.label}${argsStr}: ${durationStr} ms`;
+    // One column per ancestor: a connector while that ancestor has more siblings below
+    const treePrefix = ancestors.map(hasMoreSiblings => hasMoreSiblings ? '│ ' : formatters.indent).join('');
+    let line = `${treePrefix}${isLastChild ? formatters.lastChildPrefix : formatters.childPrefix}${execution.label}${argsStr}: ${durationStr} ms`;
     
     // Add memory usage if it was collected for this execution
     if (execution.memoryAtStart !== undefined && execution.memoryDelta !== undefined) {
