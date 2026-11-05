@@ -94,6 +94,20 @@ assert.strictEqual(value, 3);
   run(process.execPath, ['index.js'], dir);
 });
 
+check('traceperf CLI (npx traceperf report)', () => {
+  const dir = path.join(work, 'cjs');
+  fs.writeFileSync(path.join(dir, 'make-log.js'), `
+const { createTracePerf, jsonLinesExporter } = require('traceperf');
+const lines = [];
+const tp = createTracePerf({ silent: true, plugins: [jsonLinesExporter(l => lines.push(l))] });
+for (let i = 0; i < 3; i++) tp.track(() => tp.track(() => i, { label: 'child' }), { label: 'parent' });
+require('fs').writeFileSync('calls.jsonl', lines.join('\\n'));
+`);
+  run(process.execPath, ['make-log.js'], dir);
+  const out = run(isWin ? 'npx.cmd' : 'npx', ['--no-install', 'traceperf', 'report', 'calls.jsonl'], dir);
+  if (!/6 calls, 2 labels/.test(out)) throw new Error(`unexpected CLI output:\n${out}`);
+});
+
 if (!runtimeOnly) {
   const tsc = path.join(root, 'node_modules', '.bin', isWin ? 'tsc.cmd' : 'tsc');
   const esbuild = path.join(root, 'node_modules', '.bin', isWin ? 'esbuild.cmd' : 'esbuild');
