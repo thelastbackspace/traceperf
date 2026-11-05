@@ -1,6 +1,8 @@
 import { IPerformanceMonitor } from '../types';
 import { getHighResTime, getDuration } from '../utils/timing';
-import { v4 as uuidv4 } from 'uuid';
+
+// Timer ids only need to be unique within the process
+let timerSequence = 0;
 
 /**
  * Performance monitor for tracking execution times and memory usage
@@ -25,7 +27,7 @@ export class PerformanceMonitor implements IPerformanceMonitor {
    * @returns A unique identifier for the timing operation
    */
   public startTimer(label: string): string {
-    const id = `${label}-${uuidv4()}`;
+    const id = `${label}-${++timerSequence}`;
     this._timers.set(id, getHighResTime());
     return id;
   }
