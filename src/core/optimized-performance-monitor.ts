@@ -770,7 +770,7 @@ export class OptimizedExecutionTracker {
 }
 
 /**
- * Interface for performance monitor options
+ * @deprecated Use `TracePerfConfig`.
  */
 export type PerformanceMonitorOptions = TracePerfConfig;
 
