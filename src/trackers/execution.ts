@@ -1,6 +1,6 @@
 import { IExecutionTracker, ITrackOptions } from '../types';
 import { getFunctionName } from '../utils/stack';
-import { getHighResTime, getDuration, formatDuration } from '../utils/timing';
+import { getHighResTime, getDuration } from '../utils/timing';
 
 /**
  * A record of a function execution

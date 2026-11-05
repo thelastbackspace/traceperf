@@ -28,6 +28,7 @@ describe('ExecutionTracker', () => {
       for (let i = 0; i < 1000; i++) {
         sum += i;
       }
+      return sum;
     }, { label: 'testFunction' });
     
     const flowChart = executionTracker.generateFlowChart();

@@ -1,6 +1,5 @@
 import * as utils from '../utils';
 import * as colors from '../utils/colors';
-import * as stringUtils from '../utils/string';
 import * as timing from '../utils/timing';
 import { getFunctionName, CallStackManager } from '../utils/stack';
 

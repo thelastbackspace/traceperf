@@ -81,7 +81,7 @@ export class CliFormatter implements IFormatter {
     } else {
       try {
         formattedMessage = JSON.stringify(message, null, 2);
-      } catch (error) {
+      } catch {
         formattedMessage = String(message);
       }
     }
@@ -92,7 +92,7 @@ export class CliFormatter implements IFormatter {
         if (typeof arg === 'object' && arg !== null) {
           try {
             return JSON.stringify(arg, null, 2);
-          } catch (error) {
+          } catch {
             return String(arg);
           }
         }

@@ -66,7 +66,7 @@ export class JsonFormatter implements IFormatter {
     try {
       // Use JSON.parse(JSON.stringify()) to remove non-serializable values
       return JSON.parse(JSON.stringify(obj));
-    } catch (error) {
+    } catch {
       // If serialization fails, return a simplified object
       return { value: String(obj) };
     }

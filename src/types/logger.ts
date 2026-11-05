@@ -1,4 +1,4 @@
-import { LogLevel, LogMode, ITrackOptions } from './config';
+import { LogMode, ITrackOptions } from './config';
 
 /**
  * ILogger - Interface for the main logger functionality
