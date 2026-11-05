@@ -1,23 +1,12 @@
 export * from './config';
 export * from './logger';
+export * from './options';
+import type { TracePerfConfig } from './options';
 
 /**
- * Interface for TracePerf configuration
+ * TracePerf configuration (same as TracePerfConfig)
  */
-export interface ITracePerfConfig {
-  /** Tracking mode for balancing performance vs detail */
-  trackingMode?: string;
-  /** Whether to suppress console output */
-  silent?: boolean;
-  /** Whether to track memory usage */
-  trackMemory?: boolean;
-  /** Whether to enable nested function tracking */
-  enableNestedTracking?: boolean;
-  /** Only report calls taking at least this many milliseconds (default 0) */
-  threshold?: number;
-  /** Sampling rate (0.0-1.0) for reducing overhead */
-  sampleRate?: number;
-}
+export type ITracePerfConfig = TracePerfConfig;
 
 /**
  * Interface for tracking options

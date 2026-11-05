@@ -127,3 +127,23 @@ describe('package exports', () => {
     expect(logs.join('\n')).toContain('scriptTag');
   });
 });
+
+describe('CommonJS default export', () => {
+  test('named exports never shadow methods of the default instance', () => {
+    const out = runNode([
+      '-e',
+      `const tp = require('traceperf');
+       const { OptimizedPerformanceMonitor } = tp;
+       const methods = Object.getOwnPropertyNames(OptimizedPerformanceMonitor.prototype);
+       const shadowed = methods.filter(m => Object.prototype.hasOwnProperty.call(tp, m) && m !== 'traced');
+       const { traced } = tp;
+       class S { m() { return 1; } }
+       const d = Object.getOwnPropertyDescriptor(S.prototype, 'm');
+       traced()(S.prototype, 'm', d);
+       Object.defineProperty(S.prototype, 'm', d);
+       tp.setConfig({ silent: true });
+       console.log(JSON.stringify({ shadowed, stats: typeof tp.formatStats(), decorated: new S().m(), viaMethod: typeof tp.traced() }));`,
+    ]);
+    expect(JSON.parse(out.trim().split('\n').pop()!)).toEqual({ shadowed: [], stats: 'string', decorated: 1, viaMethod: 'function' });
+  });
+});

@@ -11,35 +11,28 @@
  * 7. Enhanced visualization
  */
 
+import {
+  ExecutionRecord,
+  ExecutionStart,
+  TracePerfPlugin,
+  coveredLength,
+  formatTree,
+} from './records';
+import { LabelStats, StatsCollector, StatsOptions, formatStatsTable } from './stats';
+import { TraceRecorder, createTraceRecorder } from './exporters';
+import { loadNodeBuiltin } from './env';
+import type { ModuleTrackOptions, TrackCallOptions, TrackOptions, TracePerfConfig } from '../types/options';
+
 // Define tracking mode constants directly to avoid circular dependency
 export const TrackingModes = {
   PERFORMANCE: 'performance',
   BALANCED: 'balanced',
   DETAILED: 'detailed',
   DEBUG: 'debug'
-};
+} as const;
 
 // Define default tracking mode separately to avoid circular dependency
 const DEFAULT_TRACKING_MODE = TrackingModes.BALANCED;
-
-/**
- * Load a Node.js built-in module without a static import, so the package
- * still loads (and bundles) in browsers. Returns undefined outside Node.
- */
-const loadNodeBuiltin = (id: string): any => {
-  try {
-    const proc: any = typeof process !== 'undefined' ? process : undefined;
-    if (!proc || !proc.versions || !proc.versions.node) return undefined;
-    if (typeof proc.getBuiltinModule === 'function') {
-      return proc.getBuiltinModule(id);
-    }
-    // Indirect require so browser bundlers don't try to bundle the module
-    const req: ((name: string) => any) | undefined = typeof require === 'function' ? require : undefined;
-    return req ? req(id) : undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 // v8.getHeapStatistics() reports the same heap figure as
 // process.memoryUsage().heapUsed but ~20x faster (it skips measuring RSS).
@@ -107,6 +100,11 @@ export interface ExecutionTrackerOptions {
   enableNestedTracking?: boolean;
   threshold?: number;
   sampleRate?: number;
+  enabled?: boolean;
+  blockingThreshold?: number;
+  stats?: boolean | StatsOptions;
+  reporter?: (root: ExecutionRecord) => void;
+  plugins?: TracePerfPlugin[];
 }
 
 /**
@@ -144,7 +142,12 @@ export interface ExecutionData {
   silent?: boolean;
   trackingMode?: string;
   threshold?: number;
+  /** Set when the function returned a promise: the end of its synchronous part */
+  syncEndTime?: number;
 }
+
+// Offset from the monotonic clock (ms) to Unix epoch ms, fixed at load time
+const EPOCH_OFFSET_MS = Date.now() - getTimestamp() / 1000000;
 
 const MAX_ARG_LENGTH = 50;
 
@@ -218,6 +221,27 @@ const createExecutionContext = (): ExecutionContext => {
   };
 };
 
+/**
+ * A manually-ended execution, see `startSpan()` / `monitor.start()`
+ */
+export interface Span {
+  /** Execution id ('' when the span is not recorded: disabled or sampled out) */
+  readonly id: string;
+  /** Rename the span before it ends (e.g. once a route is known) */
+  setLabel(label: string): void;
+  /** Run `fn` as part of this span; tracked calls inside become its children */
+  run<R>(fn: () => R): R;
+  /** Finish the span; pass the error if the work failed. Calling twice is a no-op. */
+  end(error?: unknown): void;
+}
+
+const NOOP_SPAN: Span = {
+  id: '',
+  setLabel: () => undefined,
+  run: <R>(fn: () => R): R => fn(),
+  end: () => undefined
+};
+
 const clampRate = (rate: number): number => Math.max(0, Math.min(1, rate));
 
 const isNativePromise = (value: unknown): value is Promise<unknown> =>
@@ -239,17 +263,16 @@ export class OptimizedExecutionTracker {
   public trackingMode: string;
   public defaultThreshold: number;
   public defaultSampleRate: number;
-  
-  // Formatters for flow chart generation
-  private _formatters = {
-    indent: '  ',
-    childPrefix: '├─ ',
-    lastChildPrefix: '└─ ',
-    linePrefix: '│  ',
-    emptyPrefix: '   ',
-    errorMarker: '✖ ',
-    memoryLabel: '📊 '
-  };
+  /** When false, tracked functions just call through (no timing at all) */
+  public enabled: boolean;
+  /** Sync time (ms) from which detailed output flags event-loop blocking; 0 disables */
+  public blockingThreshold: number;
+  /** Replaces console output for reported trees (null = default console tree) */
+  public reporter: ((root: ExecutionRecord) => void) | null;
+  /** Per-label statistics (null when disabled) */
+  public stats: StatsCollector | null;
+  private plugins: TracePerfPlugin[] = [];
+  private failedPlugins = new Set<TracePerfPlugin>();
 
   /**
    * Create a new execution tracker
@@ -262,6 +285,38 @@ export class OptimizedExecutionTracker {
     this.trackingMode = options.trackingMode ?? TrackingModes.BALANCED;
     this.defaultThreshold = options.threshold ?? 0;
     this.defaultSampleRate = clampRate(options.sampleRate ?? 1);
+    this.enabled = options.enabled ?? true;
+    this.blockingThreshold = options.blockingThreshold ?? 50;
+    this.reporter = options.reporter ?? null;
+    this.stats = options.stats === false ? null :
+      new StatsCollector(typeof options.stats === 'object' ? options.stats : {});
+    (options.plugins || []).forEach(plugin => this.use(plugin));
+  }
+
+  /**
+   * Register a plugin. Returns a function that removes it again.
+   */
+  public use(plugin: TracePerfPlugin): () => void {
+    this.plugins = [...this.plugins, plugin];
+    return () => {
+      this.plugins = this.plugins.filter(p => p !== plugin);
+    };
+  }
+
+  private _callPlugins(hook: 'onStart' | 'onComplete', payload: ExecutionStart | ExecutionRecord): void {
+    for (const plugin of this.plugins) {
+      const fn = plugin[hook] as ((value: any) => void) | undefined;
+      if (!fn) continue;
+      try {
+        fn.call(plugin, payload);
+      } catch (error) {
+        // Never let a plugin break the tracked code; warn once per plugin
+        if (!this.failedPlugins.has(plugin)) {
+          this.failedPlugins.add(plugin);
+          console.warn(`traceperf: plugin ${plugin.name || '(unnamed)'} threw in ${hook}:`, error);
+        }
+      }
+    }
   }
 
   /**
@@ -314,7 +369,11 @@ export class OptimizedExecutionTracker {
     
     // Store in active executions map
     this.activeExecutions.set(executionId, execution);
-    
+
+    if (this.plugins.length > 0) {
+      this._callPlugins('onStart', { id: executionId, label: execution.label, parentId: parentExecutionId });
+    }
+
     return executionId;
   }
 
@@ -352,17 +411,27 @@ export class OptimizedExecutionTracker {
       return execution;
     }
     
-    // Root (or a child that outlived its parent): report the whole tree
-    if (!execution.silent &&
-        execution.trackingMode !== TrackingModes.PERFORMANCE &&
-        this._meetsThreshold(execution)) {
-      const flowChart = this._generateExecutionFlowChart(execution);
-      console.log(flowChart.replace(/\n$/, ''));
-    }
-    
+    // Root (or a child that outlived its parent): build the record tree once
+    // and hand it to stats, the console reporter and plugins.
+    const record = this._toRecord(execution);
+
     // Release the finished tree so memory use does not grow with call count
     this._release(execution);
-    
+
+    if (this.stats) {
+      this.stats.addTree(record);
+    }
+
+    if (!record.silent &&
+        record.trackingMode !== TrackingModes.PERFORMANCE &&
+        record.duration >= record.threshold) {
+      this._report(record);
+    }
+
+    if (this.plugins.length > 0) {
+      this._callPlugins('onComplete', record);
+    }
+
     return execution;
   }
 
@@ -380,79 +449,70 @@ export class OptimizedExecutionTracker {
   }
 
   /**
-   * Whether an execution ran at least as long as its threshold (ms)
+   * Mark the end of the synchronous part of an execution that returned a promise
    */
-  private _meetsThreshold(execution: ExecutionData): boolean {
-    return execution.duration / 1000000 >= (execution.threshold ?? 0);
+  public markSyncEnd(executionId: string): void {
+    const execution = this.activeExecutions.get(executionId);
+    if (execution) {
+      execution.syncEndTime = getTimestamp();
+    }
   }
 
   /**
-   * Generate a visualization of the execution flow
-   * @param execution The execution to visualize
-   * @param depth Current depth in the tree
-   * @param isLastChild Whether this is the last child
-   * @param ancestors Array tracking if parents were last children
-   * @returns Formatted execution flow chart
+   * Convert a finished execution (and its finished children) to a record tree
    */
-  private _generateExecutionFlowChart(
-    execution: ExecutionData, 
-    depth: number = 0, 
-    isLastChild: boolean = true, 
-    ancestors: boolean[] = []
-  ): string {
-    const trackingMode = execution.trackingMode ?? this.trackingMode;
-    // Skip in performance mode
-    if (trackingMode === TrackingModes.PERFORMANCE) {
-      return '';
-    }
-    
-    // Build the flow chart
-    let flowChart = '';
-    
-    // Format the execution line based on tracking mode
-    const durationStr = (execution.duration / 1000000).toFixed(3);
-    const formatters = this._formatters;
-    const argsStr = execution.args && execution.args.length > 0 ? `(${execution.args.join(', ')})` : '';
-    // One column per ancestor: a connector while that ancestor has more siblings below
-    const treePrefix = ancestors.map(hasMoreSiblings => hasMoreSiblings ? '│ ' : formatters.indent).join('');
-    let line = `${treePrefix}${isLastChild ? formatters.lastChildPrefix : formatters.childPrefix}${execution.label}${argsStr}: ${durationStr} ms`;
-    
-    // Add memory usage if it was collected for this execution
+  private _toRecord(execution: ExecutionData): ExecutionRecord {
+    const children = execution.children
+      .map(childId => this.executionTree[childId])
+      .filter((child): child is ExecutionData => child !== undefined)
+      .map(child => this._toRecord(child));
+    const startTime = execution.startTime / 1000000;
+    const endTime = execution.endTime / 1000000;
+    const duration = execution.duration / 1000000;
+    const covered = coveredLength(children.map(c => [Math.max(c.startTime, startTime), Math.min(c.endTime, endTime)] as [number, number]));
+    const isAsync = execution.syncEndTime !== undefined;
+    const record: ExecutionRecord = {
+      id: execution.id,
+      label: execution.label,
+      parentId: execution.parentId,
+      startTime,
+      endTime,
+      startEpochMs: EPOCH_OFFSET_MS + startTime,
+      duration,
+      selfDuration: Math.max(0, duration - covered),
+      syncDuration: isAsync ? (execution.syncEndTime! - execution.startTime) / 1000000 : duration,
+      async: isAsync,
+      children,
+      threshold: execution.threshold ?? 0,
+      trackingMode: execution.trackingMode ?? this.trackingMode,
+      silent: execution.silent ?? this.silent,
+    };
     if (execution.memoryAtStart !== undefined && execution.memoryDelta !== undefined) {
-      const memoryStr = (execution.memoryDelta / 1024).toFixed(2);
-      const sign = execution.memoryDelta >= 0 ? '+' : '';
-      line += ` ${formatters.memoryLabel}${sign}${memoryStr} KB`;
+      record.memoryDelta = execution.memoryDelta;
     }
-    
-    // Add error indicator
-    if (execution.error !== null && execution.error !== undefined &&
-        (trackingMode === TrackingModes.DETAILED || trackingMode === TrackingModes.DEBUG)) {
-      const error: any = execution.error;
-      line += ` ${formatters.errorMarker}${error instanceof Error ? error.message : String(error)}`;
+    if (execution.error !== null && execution.error !== undefined) {
+      record.error = execution.error;
     }
-    
-    flowChart += line + '\n';
-    
-    // Process children (skip in performance mode)
-    if (execution.children && execution.children.length > 0) {
-      // Still-running children are reported on their own when they finish
-      const childExecutions = execution.children
-        .map(childId => this.executionTree[childId])
-        .filter(child => child !== undefined && this._meetsThreshold(child));
-        
-      for (let i = 0; i < childExecutions.length; i++) {
-        const isLast = i === childExecutions.length - 1;
-        const childFlowChart = this._generateExecutionFlowChart(
-          childExecutions[i]!,
-          depth + 1,
-          isLast,
-          [...ancestors, !isLastChild]
-        );
-        flowChart += childFlowChart;
-      }
+    if (execution.args && execution.args.length > 0) {
+      record.args = execution.args;
     }
-    
-    return flowChart;
+    return record;
+  }
+
+  /**
+   * Print a finished tree (or hand it to the custom reporter)
+   */
+  private _report(record: ExecutionRecord): void {
+    if (this.reporter) {
+      this.reporter(record);
+      return;
+    }
+    const detailed = record.trackingMode === TrackingModes.DETAILED || record.trackingMode === TrackingModes.DEBUG;
+    console.log(formatTree(record, {
+      detailed,
+      showErrors: detailed,
+      blockingThreshold: this.blockingThreshold
+    }));
   }
 
   /**
@@ -482,6 +542,11 @@ export class OptimizedExecutionTracker {
     }
     
     const invoke = (thisArg: unknown, args: Parameters<T>): ReturnType<T> => {
+      // Disabled: call straight through
+      if (!this.enabled) {
+        return fn.apply(thisArg, args);
+      }
+
       // Apply sampling - randomly decide whether to track this call
       const sampleRate = options.sampleRate !== undefined ?
         clampRate(options.sampleRate) : this.defaultSampleRate;
@@ -526,6 +591,7 @@ export class OptimizedExecutionTracker {
       // Other thenables are returned untouched - calling their then() could
       // trigger side effects (e.g. query builders) or change their type.
       if (isNativePromise(result)) {
+        this.markSyncEnd(executionId);
         return result.then(
           (resolvedValue: unknown) => {
             this.endTimer(executionId, resolvedValue);
@@ -553,6 +619,46 @@ export class OptimizedExecutionTracker {
     Object.defineProperty(trackedFn, 'length', { value: fn.length });
     
     return trackedFn as (...args: Parameters<T>) => ReturnType<T>;
+  }
+
+  /**
+   * Start a manually-ended execution (a "span"). Use `run()` to execute code
+   * as part of it, so tracked calls inside attach as children, and `end()`
+   * when the work is finished.
+   */
+  public startSpan(label: string, options: Record<string, any> = {}): Span {
+    if (!this.enabled) {
+      return NOOP_SPAN;
+    }
+    const sampleRate = options.sampleRate !== undefined ? clampRate(options.sampleRate) : this.defaultSampleRate;
+    if (!(Math.random() < sampleRate)) {
+      return NOOP_SPAN;
+    }
+    const nested = this.enableNestedTracking && options.enableNestedTracking !== false;
+    const explicitParentId: string | null = options.parentExecutionId || null;
+    const parentExecutionId = explicitParentId ?? (nested ? this.context.current() : null);
+    const executionId = this.startTimer(label || 'anonymous', parentExecutionId, {
+      trackMemory: options.trackMemory,
+      silent: options.silent,
+      trackingMode: options.trackingMode,
+      threshold: options.threshold
+    });
+    let ended = false;
+    return {
+      id: executionId,
+      setLabel: (newLabel: string) => {
+        const execution = this.activeExecutions.get(executionId);
+        if (execution && newLabel) {
+          execution.label = newLabel;
+        }
+      },
+      run: <R>(fn: () => R): R => (nested ? this.context.run(executionId, fn) : fn()),
+      end: (error?: unknown) => {
+        if (ended) return;
+        ended = true;
+        this.endTimer(executionId, undefined, (error ?? null) as Error | null);
+      }
+    };
   }
 
   /**
@@ -621,20 +727,18 @@ export class OptimizedExecutionTracker {
     this.executionTree = {};
     this.currentExecutionId = 0;
     this.activeExecutions = new Map();
+    if (this.stats) {
+      this.stats.reset();
+    }
   }
 }
 
 /**
  * Interface for performance monitor options
  */
-export interface PerformanceMonitorOptions {
-  trackingMode?: string;
-  silent?: boolean;
-  trackMemory?: boolean;
-  enableNestedTracking?: boolean;
-  threshold?: number;
-  sampleRate?: number;
-}
+export type PerformanceMonitorOptions = TracePerfConfig;
+
+type MethodDecorator = (target: any, context?: any, descriptor?: PropertyDescriptor) => any;
 
 /**
  * Main performance monitoring interface
@@ -647,6 +751,8 @@ export class OptimizedPerformanceMonitor {
     enableNestedTracking: boolean;
     threshold: number;
     sampleRate: number;
+    enabled: boolean;
+    blockingThreshold: number;
   };
   
   private executionTracker: OptimizedExecutionTracker;
@@ -662,8 +768,9 @@ export class OptimizedPerformanceMonitor {
       trackMemory: options.trackMemory !== undefined ? options.trackMemory : true,
       enableNestedTracking: options.enableNestedTracking !== undefined ? options.enableNestedTracking : true,
       threshold: options.threshold ?? 0,
-      sampleRate: options.sampleRate !== undefined ? 
-        Math.max(0, Math.min(1, options.sampleRate)) : 1.0 // Clamp between 0 and 1
+      sampleRate: options.sampleRate !== undefined ? clampRate(options.sampleRate) : 1.0,
+      enabled: options.enabled ?? true,
+      blockingThreshold: options.blockingThreshold ?? 50
     };
     
     this.executionTracker = new OptimizedExecutionTracker({
@@ -672,8 +779,17 @@ export class OptimizedPerformanceMonitor {
       showMemoryUsage: this.config.trackMemory,
       enableNestedTracking: this.config.enableNestedTracking,
       threshold: this.config.threshold,
-      sampleRate: this.config.sampleRate
+      sampleRate: this.config.sampleRate,
+      enabled: this.config.enabled,
+      blockingThreshold: this.config.blockingThreshold,
+      stats: options.stats,
+      reporter: options.reporter,
+      plugins: options.plugins
     });
+    
+    if (options.onComplete) {
+      this.onComplete(options.onComplete);
+    }
   }
 
   /**
@@ -682,7 +798,7 @@ export class OptimizedPerformanceMonitor {
    * @param options Tracking options
    * @returns Result of the tracked function
    */
-  public track<T>(fn: () => T, options: Record<string, any> = {}): T {
+  public track<T>(fn: () => T, options: TrackCallOptions = {}): T {
     if (typeof fn !== 'function') {
       throw new Error('First argument must be a function');
     }
@@ -703,7 +819,7 @@ export class OptimizedPerformanceMonitor {
    */
   public createTrackable<T extends (...args: any[]) => any>(
     fn: T,
-    options: Record<string, any> = {}
+    options: TrackOptions = {}
   ): (...args: Parameters<T>) => ReturnType<T> {
     if (typeof fn !== 'function') {
       throw new Error('First argument must be a function');
@@ -721,12 +837,198 @@ export class OptimizedPerformanceMonitor {
    * @param options Tracking options
    * @returns Modified module with tracked methods
    */
-  public registerModule<T extends Record<string, any>>(module: T, options: Record<string, any> = {}): T {
+  public registerModule<T extends Record<string, any>>(module: T, options: ModuleTrackOptions = {}): T {
     if (!module || typeof module !== 'object') {
       throw new Error('Module must be an object');
     }
     
     return this.executionTracker.trackModule(module, options);
+  }
+
+  /**
+   * Track every method of an object or class instance, including methods
+   * inherited from its prototype, without copying it. Returns a proxy:
+   * state changes go to the original object, and methods run with the
+   * original object as `this` (so private #fields keep working).
+   */
+  public trackObject<T extends object>(target: T, options: ModuleTrackOptions = {}): T {
+    if (!target || (typeof target !== 'object' && typeof target !== 'function')) {
+      throw new Error('trackObject expects an object');
+    }
+    const ctorName = (target as any).constructor && (target as any).constructor !== Object
+      ? (target as any).constructor.name : '';
+    const prefix = options.prefix ?? (ctorName ? `${ctorName}.` : '');
+    const trackOptions: TrackOptions = { ...options };
+    delete (trackOptions as ModuleTrackOptions).prefix;
+    const cache = new Map<PropertyKey, { original: Function; tracked: Function }>();
+    const wrap = (original: Function, key: string, proxy: unknown): Function => {
+      const tracked = this.createTrackable(original as (...args: any[]) => any, {
+        ...trackOptions,
+        label: trackOptions.label ?? `${prefix}${key}`
+      });
+      return function (this: unknown, ...args: unknown[]) {
+        return tracked.apply(this === proxy ? target : this, args);
+      };
+    };
+    const proxy: T = new Proxy(target, {
+      get: (obj, key, receiver) => {
+        const value = Reflect.get(obj, key, receiver);
+        if (typeof value !== 'function' || typeof key === 'symbol' || key === 'constructor' ||
+            (Object.prototype as any)[key] === value) {
+          return value;
+        }
+        const hit = cache.get(key);
+        if (hit && hit.original === value) {
+          return hit.tracked;
+        }
+        const tracked = wrap(value, key, proxy);
+        cache.set(key, { original: value, tracked });
+        return tracked;
+      }
+    });
+    return proxy;
+  }
+
+  /**
+   * Method decorator. Works with TypeScript 5 / TC39 standard decorators and
+   * with legacy `experimentalDecorators`. The label defaults to
+   * "ClassName.method".
+   *
+   *   class UserService {
+   *     @tp.traced()
+   *     async getUser(id: string) { ... }
+   *   }
+   */
+  public traced(options: TrackOptions = {}): MethodDecorator {
+    const trackables = new Map<string, Function>();
+    const trackedFor = (fn: Function, label: string): Function => {
+      let tracked = trackables.get(label);
+      if (!tracked) {
+        tracked = this.createTrackable(fn as (...args: any[]) => any, { ...options, label });
+        trackables.set(label, tracked);
+      }
+      return tracked;
+    };
+    const ownerName = (receiver: any): string =>
+      typeof receiver === 'function' ? receiver.name : receiver?.constructor?.name || 'anonymous';
+    const wrapMethod = (fn: Function, methodName: string): Function => {
+      const wrapped = function (this: unknown, ...args: unknown[]) {
+        const label = options.label ?? `${ownerName(this)}.${methodName}`;
+        return trackedFor(fn, label).apply(this, args);
+      };
+      Object.defineProperty(wrapped, 'name', { value: fn.name, configurable: true });
+      Object.defineProperty(wrapped, 'length', { value: fn.length, configurable: true });
+      return wrapped;
+    };
+    return (target: any, context?: any, descriptor?: PropertyDescriptor): any => {
+      // Standard decorators: (method, context)
+      if (typeof target === 'function' && context && typeof context === 'object' && 'kind' in context) {
+        if (context.kind !== 'method') {
+          throw new TypeError('@traced can only decorate methods');
+        }
+        return wrapMethod(target, String(context.name));
+      }
+      // Legacy decorators: (prototype or constructor, key, descriptor)
+      if (descriptor && typeof descriptor.value === 'function') {
+        descriptor.value = wrapMethod(descriptor.value, String(context));
+        return descriptor;
+      }
+      throw new TypeError('@traced can only decorate methods');
+    };
+  }
+
+  /**
+   * Start a manually-ended execution (a span), e.g. for a request:
+   *
+   *   const span = tp.start('GET /users');
+   *   span.run(() => next());      // tracked calls inside become children
+   *   res.on('finish', () => span.end());
+   */
+  public start(label: string, options: TrackOptions = {}): Span {
+    return this.executionTracker.startSpan(label, options);
+  }
+
+  /**
+   * Register a plugin (exporter, custom sink). Returns an unsubscribe function.
+   */
+  public use(plugin: TracePerfPlugin): () => void {
+    return this.executionTracker.use(plugin);
+  }
+
+  /**
+   * Call `listener` with every finished top-level execution tree (even when
+   * silent or below threshold). Returns an unsubscribe function.
+   */
+  public onComplete(listener: (root: ExecutionRecord) => void): () => void {
+    return this.use({ name: 'onComplete', onComplete: listener });
+  }
+
+  /**
+   * Per-label statistics (ms): count, errors, total, mean, min, max,
+   * p50/p95/p99 and mean self time.
+   */
+  public getStats(): Record<string, LabelStats>;
+  public getStats(label: string): LabelStats | undefined;
+  public getStats(label?: string): Record<string, LabelStats> | LabelStats | undefined {
+    const stats = this.executionTracker.stats;
+    if (label !== undefined) {
+      return stats ? stats.get(label) : undefined;
+    }
+    return stats ? stats.all() : {};
+  }
+
+  /** Clear collected statistics */
+  public resetStats(): OptimizedPerformanceMonitor {
+    if (this.executionTracker.stats) {
+      this.executionTracker.stats.reset();
+    }
+    return this;
+  }
+
+  /** Statistics as a text table, slowest total first */
+  public formatStats(): string {
+    return formatStatsTable(this.getStats());
+  }
+
+  /** Print the statistics table to the console */
+  public printStats(): OptimizedPerformanceMonitor {
+    console.log(this.formatStats());
+    return this;
+  }
+
+  /**
+   * Start recording finished calls for a Chrome/Perfetto trace.
+   *
+   *   const recording = tp.startTrace();
+   *   await work();
+   *   fs.writeFileSync('trace.json', JSON.stringify(recording.stop()));
+   *
+   * Open the file in https://ui.perfetto.dev or chrome://tracing.
+   */
+  public startTrace(options: { maxRoots?: number } = {}): TraceRecorder {
+    let unsubscribe: () => void = () => undefined;
+    const recorder = createTraceRecorder({ maxRoots: options.maxRoots, onStop: () => unsubscribe() });
+    unsubscribe = this.use(recorder);
+    return recorder;
+  }
+
+  /** Turn tracking on */
+  public enable(): OptimizedPerformanceMonitor {
+    this.config.enabled = true;
+    this.executionTracker.enabled = true;
+    return this;
+  }
+
+  /** Turn tracking off: tracked functions become plain pass-through calls */
+  public disable(): OptimizedPerformanceMonitor {
+    this.config.enabled = false;
+    this.executionTracker.enabled = false;
+    return this;
+  }
+
+  /** Whether tracking is on */
+  public isEnabled(): boolean {
+    return this.config.enabled;
   }
 
   /**
@@ -771,6 +1073,28 @@ export class OptimizedPerformanceMonitor {
       this.executionTracker.defaultSampleRate = this.config.sampleRate;
     }
     
+    if (config.enabled !== undefined) {
+      this.config.enabled = config.enabled;
+      this.executionTracker.enabled = config.enabled;
+    }
+    
+    if (config.blockingThreshold !== undefined) {
+      this.config.blockingThreshold = config.blockingThreshold;
+      this.executionTracker.blockingThreshold = config.blockingThreshold;
+    }
+    
+    if (config.reporter !== undefined) {
+      this.executionTracker.reporter = config.reporter;
+    }
+    
+    if (config.plugins) {
+      config.plugins.forEach(plugin => this.use(plugin));
+    }
+    
+    if (config.onComplete) {
+      this.onComplete(config.onComplete);
+    }
+    
     return { ...this.config };
   }
 
@@ -806,6 +1130,13 @@ export class OptimizedPerformanceMonitor {
   }
 
   /**
+   * Get the current tracking mode
+   */
+  public getTrackingMode(): string {
+    return this.config.trackingMode;
+  }
+
+  /**
    * Enable memory usage tracking
    * @returns This instance for chaining
    */
@@ -837,7 +1168,7 @@ export class OptimizedPerformanceMonitor {
   }
   
   /**
-   * Reset the tracker state
+   * Reset the tracker state (in-flight executions and statistics)
    * @returns This instance for chaining
    */
   public reset(): OptimizedPerformanceMonitor {
@@ -845,6 +1176,3 @@ export class OptimizedPerformanceMonitor {
     return this;
   }
 }
-
-// Remove singleton instance to avoid circular dependency - it will be created in index.ts
-// export const optimizedTracePerf = new OptimizedPerformanceMonitor(); 
