@@ -141,7 +141,7 @@ export interface OtelSpanLike {
   end(endTime?: number): unknown;
 }
 export interface OtelTracerLike {
-  startSpan(name: string, options?: { startTime?: number; attributes?: Record<string, unknown> }, context?: unknown): OtelSpanLike;
+  startSpan(name: string, options?: { startTime?: number }, context?: unknown): OtelSpanLike;
 }
 export interface OtelApiLike {
   trace: {
