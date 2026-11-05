@@ -103,6 +103,9 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
     "@aws-sdk/client-s3": "^3.1153.0",
+    "@nestjs/common": "^12.2.0",
+    "@nestjs/core": "^12.2.0",
+    "@nestjs/platform-express": "^12.2.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/context-async-hooks": "^2.12.0",
     "@opentelemetry/sdk-trace-base": "^2.12.0",
@@ -130,6 +133,7 @@
     "pg": "^8.23.1",
     "prettier": "^3.5.3",
     "publint": "^0.3.25",
+    "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "ts-jest": "^29.2.6",
     "typedoc": "^0.28.20",

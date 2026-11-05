@@ -152,3 +152,75 @@ export function withTracing<T extends (...args: any[]) => any>(
   Object.defineProperty(wrapped, 'length', { value: handler.length, configurable: true });
   return wrapped;
 }
+
+/**
+ * Koa middleware. Register it first:
+ *
+ *   app.use(koaMiddleware(tp));
+ *
+ * Labels use the matched route when @koa/router sets ctx._matchedRoute.
+ */
+export function koaMiddleware(tp: OptimizedPerformanceMonitor, options: HttpTracingOptions = {}) {
+  const { label, errorStatus, trackOptions } = splitOptions(options);
+  return async function traceperfKoa(ctx: any, next: () => Promise<unknown>): Promise<void> {
+    const path = stripQuery(ctx.path || ctx.url);
+    const span = tp.start(label({ method: ctx.method, path }), trackOptions);
+    let thrown: unknown;
+    try {
+      await span.run(() => next());
+    } catch (error) {
+      thrown = error;
+      throw error;
+    } finally {
+      const route = typeof ctx._matchedRoute === 'string' ? ctx._matchedRoute : undefined;
+      span.setLabel(label({ method: ctx.method, route, path }));
+      const status = thrown ? ((thrown as any).status || (thrown as any).statusCode || 500) : ctx.status;
+      span.end(thrown && status >= errorStatus ? thrown : statusError(status, errorStatus));
+    }
+  };
+}
+
+/**
+ * NestJS interceptor (works without importing Nest or rxjs into traceperf):
+ *
+ *   app.useGlobalInterceptors(nestInterceptor(tp));
+ *
+ * Label: "GET /users/:id" for HTTP, otherwise "Controller.handler".
+ */
+export function nestInterceptor(tp: OptimizedPerformanceMonitor, options: HttpTracingOptions = {}) {
+  const { label, errorStatus, trackOptions } = splitOptions(options);
+  return {
+    intercept(context: any, next: { handle(): any }) {
+      const type = typeof context.getType === 'function' ? context.getType() : 'http';
+      const request = type === 'http' ? context.switchToHttp().getRequest() : undefined;
+      const response = type === 'http' ? context.switchToHttp().getResponse() : undefined;
+      const handlerName = `${context.getClass?.().name ?? 'Controller'}.${context.getHandler?.().name ?? 'handler'}`;
+      const route = request && request.route && request.route.path
+        ? `${request.baseUrl || ''}${request.route.path}` : request && request.routeOptions && request.routeOptions.url;
+      const name = request
+        ? label({ method: request.method, route, path: stripQuery(request.originalUrl || request.url) })
+        : handlerName;
+      const span = tp.start(name, trackOptions);
+      const source = span.run(() => next.handle());
+      const Observable = source.constructor;
+      return new Observable((subscriber: any) => {
+        const subscription = span.run(() => source.subscribe({
+          next: (value: unknown) => subscriber.next(value),
+          error: (error: unknown) => {
+            span.end(error);
+            subscriber.error(error);
+          },
+          complete: () => {
+            const status = response && (response.statusCode ?? (typeof response.status === 'number' ? response.status : undefined));
+            span.end(statusError(status, errorStatus));
+            subscriber.complete();
+          },
+        }));
+        return () => {
+          subscription.unsubscribe();
+          span.end();
+        };
+      });
+    },
+  };
+}
