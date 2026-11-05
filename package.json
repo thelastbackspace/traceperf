@@ -8,23 +8,35 @@
   "browser": "dist/browser.js",
   "exports": {
     ".": {
-      "require": "./dist/index.js",
-      "import": "./dist/esm/index.js",
-      "types": "./dist/index.d.ts"
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
     },
     "./browser": {
-      "require": "./dist/browser.js",
-      "import": "./dist/esm/browser.js",
-      "types": "./dist/browser.d.ts"
-    }
+      "import": {
+        "types": "./dist/esm/browser.d.ts",
+        "default": "./dist/esm/browser.js"
+      },
+      "require": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      }
+    },
+    "./dist/traceperf.browser.js": "./dist/traceperf.browser.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc",
-    "build:esm": "tsc -p tsconfig.esm.json",
-    "build:browser": "tsc -p tsconfig.browser.json",
+    "build:esm": "tsc -p tsconfig.esm.json && node scripts/postbuild-esm.js",
+    "build:browser": "tsc -p tsconfig.browser.json && node scripts/build-browser-global.js",
     "build:all": "npm run build && npm run build:esm && npm run build:browser",
     "test": "jest",
     "lint": "eslint src --ext .ts",

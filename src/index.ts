@@ -1,7 +1,6 @@
 // Import optimized performance monitor from core
 import { OptimizedPerformanceMonitor, TrackingModes } from './core/optimized-performance-monitor';
 import { ITracePerfConfig } from './types';
-import * as typesExports from './types';
 
 // Create singleton instance
 const tracePerf = new OptimizedPerformanceMonitor();
@@ -20,14 +19,16 @@ export * from './core';
 export { OptimizedPerformanceMonitor };
 export { TrackingModes as TrackingMode };
 
-// Add CommonJS compatibility
+// <cjs-compat>
+// CommonJS compatibility: make `require('traceperf')` return the singleton
+// itself (so `require('traceperf').track()` works) while still exposing every
+// named export declared in the type definitions. Stripped from the ESM build.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = Object.assign(tracePerf, {
+  module.exports = Object.assign(tracePerf, module.exports, {
     default: tracePerf,
     createTracePerf,
     OptimizedPerformanceMonitor,
     TrackingMode: TrackingModes,
-    // Re-export types
-    ...typesExports
   });
-} 
+}
+// </cjs-compat>

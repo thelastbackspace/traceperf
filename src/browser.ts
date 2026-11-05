@@ -654,9 +654,10 @@ export {
   BrowserExecutionTracker
 };
 
-// Add CommonJS compatibility
+// <cjs-compat>
+// CommonJS compatibility (stripped from the ESM build)
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = Object.assign(browserLogger, {
+  module.exports = Object.assign(browserLogger, module.exports, {
     default: browserLogger,
     createBrowserLogger,
     createTracePerf,
@@ -665,4 +666,5 @@ if (typeof module !== 'undefined' && module.exports) {
     BrowserExecutionTracker,
     TrackingMode
   });
-} 
+}
+// </cjs-compat>
