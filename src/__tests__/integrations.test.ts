@@ -191,7 +191,8 @@ describe('nestInterceptor (real rxjs observables)', () => {
   });
 });
 
-describe('nestInterceptor (real NestJS app)', () => {
+// NestJS 12 requires Node >= 20 (its own engines field)
+(Number(process.versions.node.split('.')[0]) >= 20 ? describe : describe.skip)('nestInterceptor (real NestJS app)', () => {
   test('global interceptor: one root per request labelled by route, nested work', () => {
     // Plain Node process: NestJS 12 is ESM-only
     const root = path.resolve(__dirname, '..', '..');

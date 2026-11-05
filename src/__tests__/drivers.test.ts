@@ -79,7 +79,9 @@ const PG = process.env.TRACEPERF_PG_URL;
 });
 
 const MONGO = process.env.TRACEPERF_MONGO_URL;
-(MONGO ? describe : describe.skip)('instrumentMongo (real MongoDB)', () => {
+// The mongodb@7 driver used here requires Node >= 20.19 (its own engines field)
+const nodeMajor = Number(process.versions.node.split('.')[0]);
+(MONGO && nodeMajor >= 20 ? describe : describe.skip)('instrumentMongo (real MongoDB)', () => {
   test('collection operations and cursor reads', () => {
     // Plain Node process: the driver cannot build its client metadata inside Jest
     execSync('npm run build', { cwd: path.resolve(__dirname, '..', '..'), stdio: 'ignore' });
