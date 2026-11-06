@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fastify route labels:** with `traceperf/auto` or `traceperf run`, Fastify (3–5) requests are labelled by route, `GET /api/articles/:slug`, instead of one label per URL. `traceperf/auto` wraps the `fastify()` factory to add an `onRequest` hook (`wrapFastifyFactory` for doing it by hand). Any framework can do the same by setting the `ROUTE` symbol on the raw request.
+
 ## [1.7.0] - 2026-11-06
 
 ### Added

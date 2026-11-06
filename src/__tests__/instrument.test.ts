@@ -8,8 +8,10 @@ import {
   ExecutionRecord,
   instrumentFetch,
   instrumentHttp,
+  instrumentHttpServer,
   instrumentMethods,
   prismaExtension,
+  wrapFastifyFactory,
 } from '../index';
 
 let server: http.Server;
@@ -156,5 +158,28 @@ describe('prismaExtension', () => {
     });
     expect(result).toEqual([{ id: 1, take: 1 }]);
     expect(roots[0].label).toBe('prisma.User.findMany');
+  });
+});
+
+describe('Fastify route labels (wrapFastifyFactory)', () => {
+  test('requests are labelled by route, prefixes included, not by URL', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fastify = wrapFastifyFactory(require('fastify'));
+    const { tp, roots } = setup();
+    const uninstall = instrumentHttpServer(tp);
+    const app = fastify();
+    app.get('/articles/:slug', async () => ({ ok: true }));
+    app.register(async (api: any) => { api.get('/profiles/:name', async () => ({ ok: true })); }, { prefix: '/api' });
+    try {
+      await app.listen({ port: 0, host: '127.0.0.1' });
+      const port = (app.server.address() as AddressInfo).port;
+      for (const p of ['/articles/post-3', '/articles/post-7', '/api/profiles/bob', '/nope']) await get(`http://127.0.0.1:${port}${p}`);
+    } finally {
+      await app.close();
+      uninstall();
+    }
+    expect(roots.map(r => r.label)).toEqual(['GET /articles/:slug', 'GET /articles/:slug', 'GET /api/profiles/:name', 'GET /nope']);
+    expect(wrapFastifyFactory(fastify)).toBe(fastify); // idempotent
+    expect(fastify.fastify).toBe(fastify);
   });
 });
