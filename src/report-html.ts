@@ -70,9 +70,10 @@ export function renderHtmlReport(calls: Call[], stats: Record<string, LabelStats
   });
   const findingItems = findings.map((f, i) => {
     const text = `${ICON[f.kind] || '•'} ${esc(f.message)}`;
+    const fix = f.fix ? `<div class="fix">fix: ${esc(f.fix)}</div>` : '';
     return bands[i]
-      ? `<li><a href="#ev-${i}">${text}</a> <span class="at">at ${esc(ms(f.evidence!.start - start))}, ${esc(f.evidence!.labels.slice(0, 3).join(', '))}</span></li>`
-      : `<li>${text}</li>`;
+      ? `<li><a href="#ev-${i}">${text}</a> <span class="at">at ${esc(ms(f.evidence!.start - start))}, ${esc(f.evidence!.labels.slice(0, 3).join(', '))}</span>${fix}</li>`
+      : `<li>${text}${fix}</li>`;
   }).join('\n');
   const findingsSection = findings.length
     ? `<h2>Why it was slow</h2>\n<ol class="findings">\n${findingItems}\n</ol>\n<p class="meta">Click a finding to highlight its time range on the flame chart.</p>`
@@ -116,7 +117,7 @@ export function renderHtmlReport(calls: Call[], stats: Record<string, LabelStats
   .slow td:first-child { width: 1%; } .slow td:last-child, .slow th:last-child { text-align: left; white-space: normal; width: auto; } .err { color: #d73a49; }
   .wrap { overflow-x: auto; }
   ol.findings { padding-left: 20px; margin: 0; } ol.findings li { margin: 4px 0; } ol.findings a { color: inherit; }
-  .at { color: var(--muted); font-size: 12px; }
+  .fix { color: var(--muted); font-size: 13px; } .at { color: var(--muted); font-size: 12px; }
   rect.ev { fill: #f0b400; fill-opacity: 0; stroke: none; pointer-events: none; }
   rect.ev:target { fill-opacity: 0.22; stroke: #f0b400; stroke-width: 2; }
 </style>
