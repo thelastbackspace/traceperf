@@ -85,9 +85,22 @@ The database was fast; `buildReport` was blocking it. That only shows up when re
 
 - **The blocking function is named even though nothing tracks it:** `run` samples the CPU (the V8 profiler) during the synchronous part of each blocking call. Native work is named by the app function that called it (`hashPassword → pbkdf2Sync`), code V8 inlined is credited to the inlined function, and garbage-collection pauses are reported as such. `--no-profile` turns this off.
 - **Queueing the app can't see:** a request that arrives while the event loop is blocked waits in the socket before its handler starts. `run` compares what its clients waited with the app's own timings and reports the difference.
+- **What each request costs:** `run` measures how busy the event loop was during the load and where the CPU went. When requests are expensive it says what that means and what helps, for the libraries it recognises (Mongoose, TypeORM, Sequelize, Prisma, Express, class-validator…):
+
+  ```
+  🔥 Each request keeps the event loop busy ~10.7 ms, so one process tops out near 94 requests/s … CPU time went to:
+     getProperty (node_modules/mongoose/lib/helpers/get.js:63) 19%, cloneObject (…/clone.js:120) 17%, (garbage collection) 15%
+     fix: Mongoose is building full documents: add .lean() to read-only queries … and .select() only the fields you send
+  ```
+- **Timings you can trust:** after the warm-up, `run` sends a few requests one at a time (`--probe`) and takes the per-request findings (a call taking most of a request, sequential awaits, N+1) from those. Under concurrent load every `await` also waits for the busy event loop, which makes fast queries look slow.
+- **Wrong setup is said first:** "2117 of 2117 responses failed (most: 401 Unauthorized)…" instead of timings of error pages.
+
+Checked on real apps, not only on the planted ones: Prisma's REST example, the RealWorld API (Express + Prisma), an Express + Mongoose boilerplate and a NestJS + TypeORM app.
 
 - `--path /x` (repeatable): what to request. Without `--path`, use the app yourself and press Ctrl-C for the report.
 - `-c 10` concurrency, `-d 5s` duration or `-n 500` requests, `--method POST`, `--port 3000` (detected by default).
+- `-H "Authorization: Bearer $TOKEN"` (repeatable): request headers, for APIs behind a login.
+- `--probe 10`: requests per path sent one at a time before the load (0 for none).
 - `--html report.html`, `--output calls.jsonl` (keep the trees), `--json`.
 - `--warmup 3`: untimed requests per path first, so cold-start work doesn't look like a problem.
 - `--no-profile`: don't sample the CPU.
@@ -99,7 +112,7 @@ The same naming works without `run`: `TRACEPERF_PROFILE_BLOCKING=1 node --requir
 
 ## No code changes: `traceperf/auto`
 
-Start your app with traceperf preloaded. Every incoming HTTP request becomes a tree, with the outgoing `http`/`fetch` calls and the `pg`, `mysql2`, MongoDB/Mongoose, `ioredis`, Prisma and `better-sqlite3` queries it made nested under it (Drizzle runs on these drivers, so its queries show up too):
+Start your app with traceperf preloaded. Every incoming HTTP request becomes a tree, with the outgoing `http`/`fetch` calls and the `pg`, `mysql2`, `mysql`, MongoDB/Mongoose, `ioredis`, Prisma and `better-sqlite3` queries it made nested under it (Drizzle runs on these drivers, so its queries show up too):
 
 <!-- docs:skip -->
 ```bash
@@ -203,10 +216,11 @@ Ready-made helpers for popular clients. Pass the module you already use; tracepe
 
 <!-- docs:skip -->
 ```javascript
-const { instrumentPg, instrumentMysql2, instrumentMongo, instrumentRedis, instrumentAwsClient, instrumentPrisma, instrumentBetterSqlite3, prismaExtension } = require('traceperf');
+const { instrumentPg, instrumentMysql2, instrumentMysql, instrumentMongo, instrumentRedis, instrumentAwsClient, instrumentPrisma, instrumentBetterSqlite3, prismaExtension } = require('traceperf');
 
 instrumentPg(tp, require('pg'));                    // "pg SELECT users" (Pool.query included)
 instrumentMysql2(tp, require('mysql2'));            // "mysql UPDATE orders" (callback and promise APIs)
+instrumentMysql(tp, require('mysql'));              // the classic driver: connections and pools
 instrumentMongo(tp, require('mongodb'));            // "mongo find users", "mongo insertOne users"
 instrumentMongo(tp, require('mongoose').mongo);     // Mongoose uses its own copy of the driver
 instrumentRedis(tp, require('ioredis'));            // "redis GET"
