@@ -385,6 +385,8 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>): s
     }
     case 'repeated': {
       const label = labels[0] || '';
+      if (/^prisma\./.test(label)) return `load them in one call: include the relation in the parent query (include: { ... }), or findMany({ where: { id: { in: ids } } }) and match results in memory`;
+      if (/^sqlite /.test(label)) return `load them in one query: WHERE id IN (...) (in Drizzle: inArray(column, ids), or db.query with: { ... }); then match results in memory`;
       return SQL.test(label)
         ? `load them in one query: WHERE id IN (...) (or = ANY($1) in Postgres), or your ORM's include/join; then match results in memory`
         : `make one batched call instead of one per item (a bulk API, or DataLoader to collect the calls of one tick)`;

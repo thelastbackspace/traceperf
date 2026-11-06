@@ -15,6 +15,9 @@ import {
   createTracePerf,
   ExecutionRecord,
   instrumentAwsClient,
+  instrumentBetterSqlite3,
+  instrumentPrisma,
+  prismaExtension,
   instrumentMysql2,
   instrumentPg,
   instrumentRedis,
@@ -246,5 +249,96 @@ describe('instrumentAwsClient (real AWS SDK v3 client, local endpoint)', () => {
     }
     await waitFor(() => roots.length > 0);
     expect(labels(roots[0])).toEqual(['aws S3.ListBuckets']);
+  });
+});
+
+describe('instrumentPrisma (client shaped like Prisma 6: every call goes through _request)', () => {
+  // Checked by hand against @prisma/client 6.19 (model calls, $extends clients, raw queries)
+  class FakePrisma {
+    _originalClient = this;
+    _request(params: any): Promise<unknown> {
+      return new Promise((resolve, reject) => setTimeout(() => (params.args?.fail ? reject(new Error('P2002')) : resolve([])), 2));
+    }
+    get user() { return { findMany: (args?: any) => this._request({ model: 'User', action: 'findMany', clientMethod: 'user.findMany', args }) }; }
+    $queryRawUnsafe(sql: string) { return this._request({ action: 'queryRaw', clientMethod: '$queryRawUnsafe', args: [sql] }); }
+    $extends() { return Object.create(this._originalClient, { _appliedParent: { value: this } }); }
+  }
+
+  test('model calls, raw queries, extended clients and failures', async () => {
+    const { tp, roots } = setup();
+    const uninstall = instrumentPrisma(tp, { PrismaClient: FakePrisma });
+    expect(instrumentPrisma(tp, FakePrisma)).toBeInstanceOf(Function); // idempotent
+    const prisma = new FakePrisma().$extends();
+    await tp.track(async () => {
+      await prisma.user.findMany();
+      await prisma.$queryRawUnsafe('SELECT * FROM "User" WHERE id = 1');
+      await prisma.user.findMany({ fail: true }).catch(() => undefined);
+    }, { label: 'GET /users' });
+    expect(labels(roots[0])).toEqual(['prisma.User.findMany', 'prisma.raw.$queryRawUnsafe SELECT User', 'prisma.User.findMany']);
+    expect(roots[0].children[2].error).toBeInstanceOf(Error);
+    uninstall();
+    roots.length = 0;
+    await tp.track(() => prisma.user.findMany(), { label: 'after' });
+    expect(labels(roots[0])).toEqual([]);
+  });
+
+  test('prismaExtension stands aside while the client is patched (no double counting)', async () => {
+    const { tp, roots } = setup();
+    const ext = prismaExtension(tp).query.$allModels.$allOperations;
+    const call = () => ext({ model: 'User', operation: 'findMany', args: {}, query: async () => [] });
+    const uninstall = instrumentPrisma(tp, FakePrisma);
+    await tp.track(() => call(), { label: 'patched' });
+    uninstall();
+    await tp.track(() => call(), { label: 'extension only' });
+    expect(roots.map(r => [r.label, labels(r)])).toEqual([['patched', []], ['extension only', ['prisma.User.findMany']]]);
+  });
+
+  test('a client instance works too; unknown objects are ignored', async () => {
+    const { tp, roots } = setup();
+    const client = new FakePrisma();
+    const uninstall = instrumentPrisma(tp, client);
+    await tp.track(() => client.user.findMany(), { label: 'r' });
+    expect(labels(roots[0])).toEqual(['prisma.User.findMany']);
+    uninstall();
+    expect(() => instrumentPrisma(tp, {})()).not.toThrow();
+    expect(() => instrumentPrisma(tp, undefined)()).not.toThrow();
+  });
+});
+
+describe('instrumentBetterSqlite3 (database shaped like better-sqlite3: Statement class not exported)', () => {
+  // Checked by hand against better-sqlite3 12 with Drizzle
+  class Statement {
+    constructor(public source: string) {}
+    run(..._a: unknown[]) { return { changes: 1 }; }
+    get(..._a: unknown[]) { return { id: 1 }; }
+    all() {
+      if (this.source.includes('missing')) throw new Error('no such table: missing');
+      return [{ id: 1 }];
+    }
+    iterate() { return [][Symbol.iterator](); }
+    raw() { return this; }
+  }
+  class Database {
+    prepare(sql: string) { return new Statement(sql); }
+    exec(sql: string) { return sql ? this : this; }
+  }
+
+  test('statements and exec are tracked as synchronous calls', () => {
+    const { tp, roots } = setup();
+    const uninstall = instrumentBetterSqlite3(tp, Database);
+    const db = new Database();
+    tp.track(() => {
+      db.prepare('SELECT * FROM users').all();
+      db.prepare('INSERT INTO posts (t) VALUES (?)').run('a');
+      db.prepare('select id from users where id = ?').raw().get(1);
+      db.exec('CREATE TABLE t (a)');
+      try { db.prepare('SELECT * FROM missing').all(); } catch { /* expected */ }
+    }, { label: 'job' });
+    expect(labels(roots[0])).toEqual(['sqlite SELECT users', 'sqlite INSERT posts', 'sqlite SELECT users', 'sqlite CREATE t', 'sqlite SELECT missing']);
+    expect(roots[0].children[4].error).toBeInstanceOf(Error);
+    uninstall();
+    roots.length = 0;
+    tp.track(() => { db.prepare('SELECT * FROM users').all(); }, { label: 'after' });
+    expect(labels(roots[0])).toEqual([]);
   });
 });

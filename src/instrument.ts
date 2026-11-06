@@ -197,6 +197,8 @@ export function prismaExtension(tp: OptimizedPerformanceMonitor, options: TrackO
     query: {
       $allModels: {
         $allOperations(params: { model?: string; operation: string; args: unknown; query: (args: unknown) => Promise<unknown> }) {
+          // Already tracked by instrumentPrisma / traceperf/auto: don't count it twice
+          if ((globalThis as any)[Symbol.for('traceperf.prisma.patched')] > 0) return params.query(params.args);
           const label = options.label ?? `prisma.${params.model ?? 'raw'}.${params.operation}`;
           return tp.track(() => params.query(params.args), { ...options, label });
         },

@@ -12,7 +12,8 @@
  *   TRACEPERF_SAMPLE_RATE=0.1      track 10% of top-level calls
  *   TRACEPERF_SILENT=1             no per-call console trees
  *   TRACEPERF_SUMMARY=0            no stats + explanations on exit (default on)
- *   TRACEPERF_DISABLE=http,fetch   skip targets (server, http, fetch, pg, mysql2, mongodb, ioredis)
+ *   TRACEPERF_DISABLE=http,fetch   skip targets (server, http, fetch, pg, mysql2, mongodb, ioredis,
+ *                                  prisma, better-sqlite3)
  *   TRACEPERF_IGNORE=^/health      regular expression of request paths not to track
  *   TRACEPERF_QUIET=1              no "traceperf: tracking ..." line at startup
  *   TRACEPERF_PROFILE_BLOCKING=1   sample the CPU (V8 profiler) to name the

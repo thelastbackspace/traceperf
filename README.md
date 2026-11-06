@@ -13,7 +13,7 @@
 - **Honest numbers.** You get total, self and synchronous time for each call. Detailed mode flags calls that blocked the event loop.
 - **Production-ready.** Stats are bounded per label (p50/p95/p99), sampling is built in, and `enabled: false` makes tracking a pass-through costing ~40 ns.
 - **Gets data out.** Chrome/Perfetto traces, OpenTelemetry spans, JSON lines, or your own `onComplete` hook.
-- **Zero-effort coverage.** One line tracks every `fetch`, HTTP request or query, for pg, mysql2, MongoDB/Mongoose, ioredis, Prisma and the AWS SDK.
+- **Zero-effort coverage.** One line tracks every `fetch`, HTTP request or query, for pg, mysql2, MongoDB/Mongoose, ioredis, Prisma, better-sqlite3 (and Drizzle on any of these drivers) and the AWS SDK.
 - **Built for teams.** It feeds Prometheus, catches regressions in CI (`traceperf compare --fail`), shows up in Chrome DevTools, and produces HTML flame-chart reports.
 - **Fits your stack.** Express, Fastify, Hono, Koa, NestJS, Next.js route handlers, decorators, CommonJS, ESM, TypeScript, browsers, Node.js 14+, Bun, Deno, Cloudflare Workers and Vercel Edge. There are no runtime dependencies.
 
@@ -99,7 +99,7 @@ The same naming works without `run`: `TRACEPERF_PROFILE_BLOCKING=1 node --requir
 
 ## No code changes: `traceperf/auto`
 
-Start your app with traceperf preloaded. Every incoming HTTP request becomes a tree, with the outgoing `http`/`fetch` calls and the `pg`, `mysql2`, MongoDB/Mongoose and `ioredis` queries it made nested under it:
+Start your app with traceperf preloaded. Every incoming HTTP request becomes a tree, with the outgoing `http`/`fetch` calls and the `pg`, `mysql2`, MongoDB/Mongoose, `ioredis`, Prisma and `better-sqlite3` queries it made nested under it (Drizzle runs on these drivers, so its queries show up too):
 
 <!-- docs:skip -->
 ```bash
@@ -125,7 +125,7 @@ Database clients are only instrumented when your `package.json` lists them. Conf
 | `TRACEPERF_THRESHOLD=50` | Only report calls taking at least 50 ms |
 | `TRACEPERF_SAMPLE_RATE=0.1` | Track 10% of requests |
 | `TRACEPERF_IGNORE=^/health` | Regular expression of request paths not to track |
-| `TRACEPERF_DISABLE=http,fetch` | Skip targets: `server`, `http`, `fetch`, `pg`, `mysql2`, `mongodb`, `ioredis` |
+| `TRACEPERF_DISABLE=http,fetch` | Skip targets: `server`, `http`, `fetch`, `pg`, `mysql2`, `mongodb`, `ioredis`, `prisma`, `better-sqlite3` |
 | `TRACEPERF_SILENT=1` / `TRACEPERF_SUMMARY=0` / `TRACEPERF_QUIET=1` | No per-request trees / no exit summary / no startup line |
 | `TRACEPERF_ENABLED=0` | Load nothing |
 
@@ -203,13 +203,15 @@ Ready-made helpers for popular clients. Pass the module you already use; tracepe
 
 <!-- docs:skip -->
 ```javascript
-const { instrumentPg, instrumentMysql2, instrumentMongo, instrumentRedis, instrumentAwsClient, prismaExtension } = require('traceperf');
+const { instrumentPg, instrumentMysql2, instrumentMongo, instrumentRedis, instrumentAwsClient, instrumentPrisma, instrumentBetterSqlite3, prismaExtension } = require('traceperf');
 
 instrumentPg(tp, require('pg'));                    // "pg SELECT users" (Pool.query included)
 instrumentMysql2(tp, require('mysql2'));            // "mysql UPDATE orders" (callback and promise APIs)
 instrumentMongo(tp, require('mongodb'));            // "mongo find users", "mongo insertOne users"
 instrumentMongo(tp, require('mongoose').mongo);     // Mongoose uses its own copy of the driver
 instrumentRedis(tp, require('ioredis'));            // "redis GET"
+instrumentPrisma(tp, require('@prisma/client'));    // "prisma.User.findMany" (every client, $extends included)
+instrumentBetterSqlite3(tp, require('better-sqlite3')); // "sqlite SELECT users" (synchronous: slow ones show as blocking)
 instrumentAwsClient(tp, s3Client);                  // "aws S3.GetObject"
 const prisma = new PrismaClient().$extends(prismaExtension(tp)); // "prisma.User.findMany"
 ```
