@@ -380,7 +380,10 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     const total = rootCount.get(g.root) || 0;
     // Blocking counts per root label too; a rare but long block (a 2 s export) is still worth saying
     const scope = g.kind === 'blocking' ? Math.max(...[...g.roots].map(r => rootCount.get(r) || 0)) : total;
-    const rare = (g.roots.size === 1 || g.kind === 'blocking') && scope >= 20 && g.times / scope < 0.05 && !((g.kind === 'blocking' || g.kind === 'blocked') && g.ms >= 100);
+    // Under 5% of 20+ requests, or once in 10+: an outlier, not a pattern
+    const rare = (g.roots.size === 1 || g.kind === 'blocking') &&
+      ((scope >= 20 && g.times / scope < 0.05) || (scope >= 10 && g.times === 1)) &&
+      !((g.kind === 'blocking' || g.kind === 'blocked') && g.ms >= 100);
     if (g.ms < minMs || rare) grouped.delete(key);
     else if (g.kind !== 'blocking' && g.roots.size === 1 && total > g.times) share.set(g, `in ${g.times} of ${total} ${g.root}`);
   }

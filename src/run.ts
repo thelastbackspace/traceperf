@@ -21,6 +21,13 @@ export interface RunArgs {
   requests?: number;
   /** Requests per path sent before measuring (not reported), default 3 */
   warmup: number;
+  /**
+   * Requests per path sent one at a time after the warm-up (default 10, 0
+   * for none). Per-request findings (a dominant call, sequential awaits,
+   * N+1) come from these: under concurrent load every await also waits for
+   * the busy event loop, which inflates call times.
+   */
+  probe: number;
   port?: number;
   host: string;
   method: string;
@@ -47,6 +54,8 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --method GET     request method
       -H, --header "Name: value"   request header, repeatable (e.g. -H "Authorization: Bearer $TOKEN")
       --warmup 3       untimed requests per path first (cold start), 0 for none
+      --probe 10       requests per path sent one at a time before the load, for
+                       per-request findings with undistorted timings (0: none)
       --html out.html  write an HTML report
       --output f.jsonl keep the raw request trees
       --json           print stats and findings as JSON
@@ -64,7 +73,7 @@ function parseDuration(value: string | undefined): number | undefined {
 export function parseRunArgs(argv: string[]): RunArgs | string {
   const args: RunArgs = {
     command: [], paths: [], concurrency: 10, durationMs: 5000, host: '127.0.0.1',
-    method: 'GET', warmup: 3, json: false, profile: true, max: 10, startTimeoutMs: 15000,
+    method: 'GET', warmup: 3, probe: 10, json: false, profile: true, max: 10, startTimeoutMs: 15000,
   };
   const num = (name: string, v: string | undefined): number | string => {
     const n = Number(v);
@@ -126,6 +135,12 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
       }
       case '--json': args.json = true; break;
       case '--no-profile': args.profile = false; break;
+      case '--probe': {
+        const n = Number(argv[++i]);
+        if (!(n >= 0)) return '--probe expects a number';
+        args.probe = Math.floor(n);
+        break;
+      }
       default:
         // Our options can come before or after the app; anything else after
         // the app is the app's own argument (use -- to pass everything as is)
@@ -281,6 +296,31 @@ export function busyFinding(samples: LoadSample[], load: LoadResult, window: { s
   };
 }
 
+const STATUS_TEXT: Record<string, string> = {
+  400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
+  429: 'Too Many Requests', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable',
+};
+
+/** Most responses were errors: the timings describe error handling, not the endpoint */
+export function statusFinding(load: LoadResult): Finding | undefined {
+  const total = Object.values(load.statuses).reduce((a, b) => a + b, 0) + load.errors;
+  const failed = Object.entries(load.statuses).filter(([s]) => Number(s) >= 400);
+  const failedCount = failed.reduce((sum, [, n]) => sum + n, 0) + load.errors;
+  if (total === 0 || failedCount < 0.5 * total) return undefined;
+  const [top, n] = failed.sort((a, b) => b[1] - a[1])[0] || ['connection error', load.errors];
+  const what = /^\d+$/.test(top) ? `${top}${STATUS_TEXT[top] ? ` ${STATUS_TEXT[top]}` : ''}` : top;
+  const hint = top === '401' || top === '403'
+    ? 'pass credentials with -H, e.g. -H "Authorization: Bearer $TOKEN" (an expired token gives this too)'
+    : top === '404' ? 'check the --path values' : 'look at the app output above for the error';
+  return {
+    kind: 'error',
+    root: 'load',
+    ms: 0,
+    message: `${failedCount} of ${total} responses failed (most: ${n}× ${what}), so the timings below describe error responses, not the endpoints`,
+    fix: hint,
+  };
+}
+
 export interface RunSummary {
   stats: string;
   findings: Finding[];
@@ -406,6 +446,16 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
 
   let load: LoadResult | undefined;
   let skipBytes = 0;
+  let probeFrom: number | undefined;
+  const sizeNow = async (): Promise<number> => {
+    // The last trees are written just after their responses
+    await new Promise(r => setTimeout(r, 100));
+    try {
+      return fs.statSync(output).size;
+    } catch {
+      return 0;
+    }
+  };
   try {
     if (args.paths.length) {
       const port = args.port ?? (await waitForPort(fs, readyFile, () => exited, args.startTimeoutMs));
@@ -419,13 +469,13 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       deps.err(`traceperf: sending ${args.requests ? `${args.requests} requests` : `${args.durationMs / 1000} s of traffic`} to ${args.paths.join(', ')} on port ${port}, ${args.concurrency} at a time`);
       if (args.warmup > 0) {
         await sendLoad(deps.http, { ...args, concurrency: 1, requests: args.warmup * args.paths.length }, port);
-        // The last warm-up trees are written just after their responses
-        await new Promise(r => setTimeout(r, 100));
-        try {
-          skipBytes = fs.statSync(output).size;
-        } catch {
-          skipBytes = 0;
-        }
+        skipBytes = await sizeNow();
+      }
+      // One at a time: timings not inflated by queueing (only useful when the load is concurrent)
+      if (args.probe > 0 && args.concurrency > 1) {
+        probeFrom = skipBytes;
+        await sendLoad(deps.http, { ...args, concurrency: 1, requests: args.probe * args.paths.length }, port);
+        skipBytes = await sizeNow();
       }
       const loadStart = Date.now();
       load = await sendLoad(deps.http, args, port);
@@ -445,15 +495,18 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   }
 
   let text = '';
+  let probeText = '';
   try {
     const all = fs.readFileSync(output);
-    // If the cut fell inside a tree still being written, start at the next whole line
-    let from = skipBytes;
-    if (from > 0 && from < all.length && all[from - 1] !== 0x0a) {
-      const nl = all.indexOf(0x0a, from);
-      from = nl === -1 ? all.length : nl + 1;
-    }
+    // If a cut fell inside a tree still being written, move it to the next whole line
+    const align = (at: number) => {
+      if (at <= 0 || at >= all.length || all[at - 1] === 0x0a) return Math.min(Math.max(at, 0), all.length);
+      const nl = all.indexOf(0x0a, at);
+      return nl === -1 ? all.length : nl + 1;
+    };
+    const from = align(skipBytes);
     text = all.subarray(from).toString('utf8');
+    if (probeFrom !== undefined) probeText = all.subarray(align(probeFrom), from).toString('utf8');
   } catch {
     text = '';
   }
@@ -466,7 +519,15 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     // no profiles: --no-profile, no inspector, or nothing blocked
   }
   const summary = summarise(text, deps, args.max, profiles, process.cwd());
+  // Per-request structure from the one-at-a-time probe, where call times are not inflated by queueing
+  const STRUCTURAL = ['dominant', 'sequential', 'repeated'];
+  if (probeText.trim()) {
+    const structural = explain(deps.parseTrees(probeText), { max: args.max }).filter(f => STRUCTURAL.includes(f.kind));
+    summary.findings = [...summary.findings.filter(f => !STRUCTURAL.includes(f.kind)), ...structural].slice(0, args.max);
+  }
   if (load) {
+    const failing = statusFinding(load);
+    if (failing) summary.findings.unshift(failing);
     const blocked = summary.findings.some(f => f.kind === 'blocking');
     let queued = queueFindings(load, deps.parseTrees(text), args.method, blocked);
     let samples: LoadSample[] = [];
