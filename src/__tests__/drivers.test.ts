@@ -1,10 +1,10 @@
 /**
  * Database / cloud client instrumentation against the real client libraries.
  *
- * Postgres and MongoDB tests need servers: set TRACEPERF_PG_URL and
- * TRACEPERF_MONGO_URL (CI provides service containers); otherwise they are
- * skipped. Redis and S3 use local protocol servers; mysql2 is exercised
- * against a closed port (connection failure path).
+ * Postgres, MySQL and MongoDB tests need servers: set TRACEPERF_PG_URL,
+ * TRACEPERF_MYSQL_URL and TRACEPERF_MONGO_URL (CI provides service
+ * containers); otherwise they are skipped. Redis and S3 use local protocol
+ * servers; mysql2's connection-failure path runs without a server.
  */
 import * as net from 'net';
 import * as http from 'http';
@@ -184,6 +184,38 @@ describe('instrumentMysql2 (real mysql2 client)', () => {
     const job = roots.find(r => r.label === 'job')!;
     expect(labels(job)).toEqual(['mysql SELECT users', 'mysql UPDATE orders']);
     job.children.forEach(c => expect(c.error).toBeDefined());
+  });
+});
+
+const MYSQL = process.env.TRACEPERF_MYSQL_URL;
+(MYSQL ? describe : describe.skip)('instrumentMysql2 (real MySQL)', () => {
+  test('query/execute through connections, pools and the promise API; failures; nesting', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mysql = require('mysql2');
+    const { tp, roots } = setup();
+    const uninstall = instrumentMysql2(tp, mysql);
+    const conn = mysql.createConnection(MYSQL);
+    const pool = mysql.createPool({ uri: MYSQL, connectionLimit: 2 });
+    try {
+      await tp.track(async () => {
+        await conn.promise().query('CREATE TEMPORARY TABLE users (id int, name text)');
+        await conn.promise().execute('INSERT INTO users VALUES (?, ?)', [1, 'ada']);
+        const rows = await new Promise<any[]>((resolve, reject) =>
+          conn.query('SELECT * FROM users WHERE id = ?', [1], (err: Error, r: any[]) => (err ? reject(err) : resolve(r))));
+        expect(rows[0].name).toBe('ada');
+        const [poolRows] = await pool.promise().query('SELECT 1 AS x FROM DUAL');
+        expect((poolRows as any)[0].x).toBe(1);
+        await expect(conn.promise().query('SELECT * FROM missing_table')).rejects.toThrow();
+      }, { label: 'job' });
+    } finally {
+      uninstall();
+      conn.end();
+      await pool.promise().end();
+    }
+    const job = roots.find(r => r.label === 'job')!;
+    expect(labels(job)).toEqual(['mysql CREATE users', 'mysql INSERT users', 'mysql SELECT users', 'mysql SELECT DUAL', 'mysql SELECT missing_table']);
+    expect(job.children[4].error).toBeDefined();
+    expect(job.children[2].duration).toBeGreaterThan(0);
   });
 });
 
