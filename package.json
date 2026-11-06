@@ -1,6 +1,6 @@
 {
   "name": "traceperf",
-  "version": "0.2.1",
+  "version": "1.3.0",
   "description": "See where the time goes: call trees in development, cheap per-function stats in production, export to Perfetto and OpenTelemetry. Node.js and browsers.",
   "type": "commonjs",
   "main": "dist/index.js",

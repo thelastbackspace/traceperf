@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - Unreleased
+## [1.3.0] - 2026-11-06
 
 ### Added
 - **Zero-code instrumentation:** `node --require traceperf/auto app.js` (or `--import` for ESM). Every incoming HTTP request is a top-level call with outgoing `http`/`fetch` calls and `pg`, `mysql2`, MongoDB/Mongoose and `ioredis` queries nested under it; database clients are instrumented only when the app's `package.json` lists them. Configured with `TRACEPERF_*` environment variables; prints statistics and explanations on exit. In code: `autoInstrument(tp)`.
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Development
 - CI runs a MySQL 8.4 service for the driver tests. The packed-package check runs `node --require traceperf/auto` on every Node version from 14 to 24.
 
-## [1.2.0] - Unreleased
+## [1.2.0] - not published separately (released in 1.3.0)
 
 ### Added
 - **Database and cloud clients:** `instrumentPg`, `instrumentMysql2`, `instrumentMongo` (also works for Mongoose via `mongoose.mongo`), `instrumentRedis` (ioredis) and `instrumentAwsClient` (AWS SDK v3). Labels look like `pg SELECT users` or `aws S3.GetObject`. `sqlLabel()` builds low-cardinality SQL labels.
@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Development
 - CI runs Postgres and MongoDB service containers for the driver tests, plus Cloudflare workerd and edge-runtime jobs.
 
-## [1.1.0] - Unreleased
+## [1.1.0] - not published separately (released in 1.3.0)
 
 ### Added
 - **OpenTelemetry live mode:** `openTelemetryExporter(api, { live: true })` opens each span when the call starts and keeps it active while the call runs (across `await`). Spans from other instrumentation (database drivers, HTTP clients) then nest under traceperf's spans.
@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI type-checks explicitly (`npm run typecheck`) and builds the TypeDoc API reference with warnings as errors (`npm run docs:api`).
 - Added issue and PR templates, plus a public ROADMAP.md.
 
-## [1.0.0] - Unreleased
+## [1.0.0] - not published separately (released in 1.3.0)
 
 Breaking release that removes the legacy logging API. See [MIGRATION.md](MIGRATION.md). The tracking API is unchanged from 0.3.
 
@@ -81,7 +81,7 @@ Breaking release that removes the legacy logging API. See [MIGRATION.md](MIGRATI
 - The browser bundle is smaller (8.0 KB gzipped, down from 9.3 KB).
 - `architecture.md` describes the current design.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - not published separately (released in 1.3.0)
 
 ### Added
 - **Results API:** `onComplete(listener)` and `use(plugin)` (`onStart`/`onComplete` hooks) receive every finished call tree as an `ExecutionRecord` (ms: duration, self time, sync time, heap delta, error, args, children). A plugin that throws is reported once and never breaks the tracked code. A `reporter` option replaces console output, and `formatTree()` renders the default output.
@@ -118,7 +118,7 @@ Breaking release that removes the legacy logging API. See [MIGRATION.md](MIGRATI
 - CI runs publint and are-the-types-wrong (`npm run lint:package`), plus Playwright tests in Chromium, Firefox and WebKit (`npm run test:browser`).
 - CI enforces overhead and bundle-size budgets (`npm run bench:check`), and lint fails on warnings.
 
-## [0.2.2] - Unreleased
+## [0.2.2] - not published separately (released in 1.3.0)
 
 ### Fixed
 - `import 'traceperf'` (ESM) failed with `ERR_MODULE_NOT_FOUND`. The ESM build is now real ESM (explicit `.js` extensions, `"type": "module"` scope) and no longer contains a `module.exports` shim that bundlers reject.
