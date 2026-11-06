@@ -6,3 +6,5 @@ export * from './event-loop';
 export * from './timeline';
 export * from './prometheus';
 export * from './allocations';
+export * from './explain';
+export * from './cpu-profile';
