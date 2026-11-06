@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-06
+
 ### Added
 - **What to do about the CPU, per library:** the CPU-cost finding now matches its hottest functions against known library costs and says what helps: Mongoose (`.lean()`), TypeORM (fewer relations, `getRawMany()`), Sequelize (`raw: true`), Prisma, Express's per-response ETag (`app.set('etag', false)`), class-transformer / class-validator, large JSON responses, password hashing, logging, garbage collection. Found on the NestJS app: 26% of its CPU was Express's `res.send`, 40% TypeORM query building.
 - **`mysql` (the classic driver)**, used by TypeORM, Knex and many older apps: `instrumentMysql(tp, require('mysql'))`, auto-detected. Connections and pools (`pool.query` includes waiting for a free connection, and failures to get one), labelled like mysql2: `mysql SELECT users`.
