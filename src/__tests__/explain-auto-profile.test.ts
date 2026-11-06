@@ -72,6 +72,15 @@ describe('explain()', () => {
     expect(formatFindings([blocking])).toMatch(/\n {3}fix: hashPassword/);
     expect(explain([hash]).find(f => f.kind === 'blocking')!.fix).toMatch(/worker_threads/);
     expect(explain([node('boom', 0, 10, { error: new Error('x') })])[0].fix).toBeUndefined();
+    const lib = { login: [{ functionName: 'submit → Writable.uncork', location: 'node_modules/pg/lib/query.js:177', ms: 16 }] };
+    expect(explain([hash], { hotspots: lib }).find(f => f.kind === 'blocking')!.fix).toMatch(/^the time is inside pg \(library code\)/);
+  });
+
+  test("a library's own sequential or repeated calls are not reported", () => {
+    const include = node('GET /feed', 0, 40, { children: [
+      node('prisma.Post.findMany', 0, 40, { children: [node('pg SELECT public.Post', 0, 20), node('pg SELECT public.User', 20, 20)] }),
+    ] });
+    expect(explain([include]).filter(f => f.kind === 'sequential' || f.kind === 'repeated')).toEqual([]);
   });
 
   test('blocking is attributed to the deepest call that did it', () => {
@@ -88,7 +97,7 @@ describe('explain()', () => {
     const page = node('page', 0, 60, { children: seq, selfDuration: 0 });
     const queries = Array.from({ length: 6 }, (_, i) => node('pg SELECT items', i * 2, 2));
     const list = node('list', 0, 20, { children: queries, selfDuration: 8 });
-    const slow = node('report', 0, 100, { children: [node('render', 0, 90)], selfDuration: 10 });
+    const slow = node('report', 0, 100, { children: [node('render', 0, 90), node('cache.get', 90, 5)], selfDuration: 5 });
     const failed = node('save', 0, 3, { children: [node('pg INSERT', 0, 2, { error: new Error('duplicate key') })], error: new Error('duplicate key') });
     const findings = explain([page, list, slow, failed]);
     const by = (kind: string) => findings.filter(f => f.kind === kind);
@@ -110,7 +119,24 @@ describe('explain()', () => {
     }));
     const seq = explain(roots).filter(f => f.kind === 'sequential');
     expect(seq).toHaveLength(1);
-    expect(seq[0].message).toMatch(/seen 5 times, worst shown/);
+    expect(seq[0].message).toMatch(/seen 5 times, typical shown\)$/);
+  });
+
+  test('grouped findings show the typical case: one cold start does not make every request look slow', () => {
+    // A request that makes one call is always mostly that call: not worth saying unless it is slow
+    expect(explain([node('GET /a', 0, 21, { selfDuration: 1, children: [node('db', 0, 20)] })])).toEqual([]);
+    expect(explain([node('GET /a', 0, 151, { selfDuration: 1, children: [node('db', 0, 150)] })])[0].kind).toBe('dominant');
+    // 9 requests where the query is 4 ms of 5 ms, one where the first connection made it 110 ms
+    const roots = [110, ...Array(9).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
+    const [once] = explain(roots).filter(f => f.kind === 'dominant');
+    expect(once.message).toMatch(/\(in 1 of 10 GET \/users\)$/);
+    // ... and once in 40 requests is noise
+    const many = [110, ...Array(39).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
+    expect(explain(many).filter(f => f.kind === 'dominant')).toEqual([]);
+    const slowRoots = [110, 40, 42, 41, 39].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
+    const [f] = explain(slowRoots).filter(x => x.kind === 'dominant');
+    expect(f.ms).toBe(41);
+    expect(f.message).toMatch(/\(41 ms of 42 ms\) \(seen 5 times, typical shown; worst 110 ms\)$/);
   });
 
   test('nothing to say', () => {

@@ -250,6 +250,11 @@ describe('queueFindings', () => {
     ];
     const findings = queueFindings(load, trees, 'GET');
     expect(findings).toHaveLength(1);
-    expect(findings[0].message).toContain('GET /ping took 0.2 ms in the app (median) but clients waited 190 ms');
+    expect(findings[0].message).toContain('GET /ping took 0.2 ms in the app (median) but clients waited 190 ms');    expect(findings[0].message).toMatch(/see blocking code above/);
+    expect(findings[0].fix).toBeUndefined();
+    // Nothing blocked: the app is simply at its throughput limit
+    const [busy] = queueFindings({ ...load, requests: 800, durationMs: 1000 }, trees, 'GET', false);
+    expect(busy.message).toMatch(/waited their turn .* \(800 requests\/s here\)$/);
+    expect(busy.fix).toMatch(/throughput limit/);
   });
 });

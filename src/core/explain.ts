@@ -208,6 +208,8 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     walk(root, node => {
       const kids = node.children;
       if (kids.length === 0) return;
+      // What a library does inside one call (Prisma's include = two queries) is not the app's to reorder
+      if (LIBRARY_CALL.test(node.label)) return;
 
       // 3. Awaited one after another although they could overlap
       const asyncKids = kids.filter(k => k.async && k.duration >= 1).sort((a, b) => a.startTime - b.startTime);
@@ -270,6 +272,8 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
 
     // 5. One child dominates the top-level call
     for (const k of root.children) {
+      // A request that makes one call is always "mostly" that call: only say so when it is slow
+      if (root.children.length === 1 && k.duration < 100) continue;
       if (k.duration >= minMs && k.duration >= dominantShare * root.duration) {
         const waited = blockers
           .filter(b => b.root !== i)
@@ -316,37 +320,64 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
 
   // Same finding for many identical roots (e.g. 1000 requests): keep the largest, count the rest
   // Blocking by the same function is grouped across top-level calls too
-  const grouped = new Map<string, Finding & { group?: string; times: number; roots: Set<string> }>();
+  type Group = Finding & { group?: string; times: number; roots: Set<string>; all: Finding[] };
+  const grouped = new Map<string, Group>();
   for (const f of findings) {
     const scope = f.kind === 'blocking' ? '' : f.root;
     // Sequential awaits in one parent are one finding, however the runs split
     const key = f.group !== undefined ? `${f.kind}|${scope}|${f.group}` : `${f.kind}|${scope}|${f.message.replace(/[0-9.]+ ?(ms|s|%)/g, '')}`;
     const g = grouped.get(key);
-    if (!g) grouped.set(key, { ...f, times: 1, roots: new Set([f.root]) });
+    if (!g) grouped.set(key, { ...f, times: 1, roots: new Set([f.root]), all: [f] });
     else {
       g.times++;
       g.roots.add(f.root);
-      if (f.ms > g.ms) Object.assign(g, { ms: f.ms, message: f.message, evidence: f.evidence });
+      g.all.push(f);
     }
+  }
+  // Show the typical occurrence (median), not the worst: one cold start
+  // should not make every request look slow. Errors keep the first.
+  const worstMs = new Map<Group, number>();
+  for (const g of grouped.values()) {
+    if (g.all.length < 2 || g.kind === 'error') continue;
+    const sorted = g.all.slice().sort((a, b) => a.ms - b.ms);
+    const typical = sorted[Math.floor((sorted.length - 1) / 2)];
+    worstMs.set(g, sorted[sorted.length - 1].ms);
+    Object.assign(g, { ms: typical.ms, message: typical.message, evidence: typical.evidence });
+  }
+  // How many top-level calls had each label: a finding in 1 of 2000 requests is an outlier
+  const rootCount = new Map<string, number>();
+  for (const r of roots) rootCount.set(r.label, (rootCount.get(r.label) || 0) + 1);
+  const share = new Map<Group, string>();
+  for (const [key, g] of grouped) {
+    if (g.kind === 'error') continue;
+    const total = rootCount.get(g.root) || 0;
+    const rare = g.kind !== 'blocking' && g.kind !== 'blocked' && g.roots.size === 1 && total >= 20 && g.times / total < 0.05;
+    if (g.ms < minMs || rare) grouped.delete(key);
+    else if (g.kind !== 'blocking' && g.roots.size === 1 && total > g.times) share.set(g, `in ${g.times} of ${total} ${g.root}`);
   }
   const order: Record<FindingKind, number> = { error: 0, blocked: 1, blocking: 2, repeated: 3, sequential: 4, dominant: 5 };
   return [...grouped.values()]
     // Failures first: they matter more than timing; then by total time involved
     .sort((a, b) => Number(b.kind === 'error') - Number(a.kind === 'error') || b.ms * b.times - a.ms * a.times || order[a.kind] - order[b.kind])
     .slice(0, options.max ?? 20)
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    .map(({ times, roots: seenIn, group, ...f }) => {
+    .map(g => {
+      const worst = worstMs.get(g);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars, prefer-const
+      let { times, roots: seenIn, group, all, ...f } = g;
       const where = [...seenIn];
       const label = where.length > 3 ? `${where.slice(0, 3).join(', ')} and ${where.length - 3} more` : where.join(', ');
       const fix = suggestFix(f, options.hotspots);
       if (fix) f = { ...f, fix };
       if (f.kind === 'blocking') {
         const self = where.length === 1 && where[0] === f.message.split(' ran ')[0];
-        const count = times > where.length ? `${times} times` : '';
+        const count = times > where.length ? `${times} times${worst !== undefined && worst > f.ms * 1.5 ? `, worst ${fmt(worst)}` : ''}` : '';
         const note = self ? count : [`in ${label}`, count].filter(Boolean).join(', ');
         return { ...f, message: note ? `${f.message} (${note})` : f.message };
       }
-      return times > 1 ? { ...f, message: `${f.message} (seen ${times} times, worst shown)` } : f;
+      const range = worst !== undefined && worst > f.ms * 1.5 ? `; worst ${fmt(worst)}` : '';
+      const seen = share.get(g) || (times > 1 ? `seen ${times} times` : '');
+      if (!seen) return f;
+      return { ...f, message: `${f.message} (${seen}${times > 1 ? `, typical shown${range}` : ''})` };
     });
 }
 
@@ -358,6 +389,8 @@ const SYNC_FIX: Array<[RegExp, string]> = [
   [/JSON\.(stringify|parse)/, 'the payload is large: paginate it, send fewer fields, or stream it (e.g. a streaming JSON encoder)'],
   [/garbage collection/, 'it allocates a lot: reuse objects/buffers and avoid building large temporary arrays or strings'],
 ];
+/** Labels traceperf gives driver / ORM calls */
+const LIBRARY_CALL = /^(prisma\.|(pg|mysql|sqlite|mongo|redis|aws) )/;
 const SQL = /\b(select|insert|update|delete|pg|mysql|postgres|sql|query|prisma|knex|sequelize|typeorm|drizzle)\b/i;
 
 /** A concrete change for a finding, from its kind, labels and CPU hotspots */
@@ -374,6 +407,11 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>): s
           const m = name.match(re);
           if (m) return `${h.functionName.split(' → ')[0]}: ${fix.replace('$1', m[1] || '')}`;
         }
+      }
+      const lib = spots[0] && (/node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)/.exec(spots[0].location) || /^(node):/.exec(spots[0].location));
+      if (lib) {
+        const where = lib[1] === 'node' ? 'Node.js itself' : `${lib[1].replace(/\\/g, '/')} (library code)`;
+        return `the time is inside ${where}, not your own code: if it only shows in the first requests it is warm-up (JIT, first connection); otherwise look at how you call it (payload size, how often)`;
       }
       const at = spots[0] ? `${spots[0].functionName.split(' → ')[0]}${spots[0].location ? ` (${spots[0].location})` : ''}` : f.call;
       return `move the CPU work in ${at} off the request path: a worker_threads Worker (e.g. a pool like piscina), split it into chunks with setImmediate, or cache its result`;

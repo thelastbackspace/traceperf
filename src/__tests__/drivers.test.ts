@@ -42,6 +42,8 @@ describe('sqlLabel', () => {
     ['/* hint */ select 1', 'SELECT'],
     [{ text: 'DELETE FROM t' }, 'DELETE t'],
     [{ sql: 'select a from b join c' }, 'SELECT b'],
+    ['SELECT "public"."Post"."id" FROM "public"."Post" WHERE 1', 'SELECT public.Post'],
+    ['select * from `shop`.`orders`', 'SELECT shop.orders'],
     ['BEGIN', 'BEGIN'],
     [undefined, 'QUERY'],
   ])('%p -> %p', (sql, label) => {
@@ -252,56 +254,66 @@ describe('instrumentAwsClient (real AWS SDK v3 client, local endpoint)', () => {
   });
 });
 
-describe('instrumentPrisma (client shaped like Prisma 6: every call goes through _request)', () => {
-  // Checked by hand against @prisma/client 6.19 (model calls, $extends clients, raw queries)
-  class FakePrisma {
-    _originalClient = this;
-    _request(params: any): Promise<unknown> {
-      return new Promise((resolve, reject) => setTimeout(() => (params.args?.fail ? reject(new Error('P2002')) : resolve([])), 2));
-    }
-    get user() { return { findMany: (args?: any) => this._request({ model: 'User', action: 'findMany', clientMethod: 'user.findMany', args }) }; }
-    $queryRawUnsafe(sql: string) { return this._request({ action: 'queryRaw', clientMethod: '$queryRawUnsafe', args: [sql] }); }
-    $extends() { return Object.create(this._originalClient, { _appliedParent: { value: this } }); }
-  }
+describe('instrumentPrisma (client that uses the tracing hook the way Prisma 5-7 does)', () => {
+  // Checked by hand against @prisma/client 6.19 and 7.0 (generated client, pg adapter)
+  const g = globalThis as any;
+  const helper = () => g.V7_PRISMA_INSTRUMENTATION?.helper ?? g.PRISMA_INSTRUMENTATION?.helper ??
+    { runInChildSpan: (_o: unknown, fn: () => unknown) => fn() };
+  const fakePrisma = {
+    _op(model: string | undefined, method: string, fail = false) {
+      return helper().runInChildSpan({ name: 'operation', attributes: { method, model } }, () =>
+        helper().runInChildSpan({ name: 'serialize' }, () =>
+          new Promise((resolve, reject) => setTimeout(() => (fail ? reject(new Error('P2002')) : resolve([])), 2))));
+    },
+    user: { findMany: (fail?: boolean) => fakePrisma._op('User', 'findMany', fail) },
+    $queryRaw: () => fakePrisma._op(undefined, 'queryRaw'),
+  };
 
-  test('model calls, raw queries, extended clients and failures', async () => {
+  test('model calls, raw queries and failures; uninstall restores the hook', async () => {
     const { tp, roots } = setup();
-    const uninstall = instrumentPrisma(tp, { PrismaClient: FakePrisma });
-    expect(instrumentPrisma(tp, FakePrisma)).toBeInstanceOf(Function); // idempotent
-    const prisma = new FakePrisma().$extends();
+    const uninstall = instrumentPrisma(tp);
+    expect(instrumentPrisma(tp)).toBeInstanceOf(Function); // idempotent
     await tp.track(async () => {
-      await prisma.user.findMany();
-      await prisma.$queryRawUnsafe('SELECT * FROM "User" WHERE id = 1');
-      await prisma.user.findMany({ fail: true }).catch(() => undefined);
+      await fakePrisma.user.findMany();
+      await fakePrisma.$queryRaw();
+      await fakePrisma.user.findMany(true).catch(() => undefined);
     }, { label: 'GET /users' });
-    expect(labels(roots[0])).toEqual(['prisma.User.findMany', 'prisma.raw.$queryRawUnsafe SELECT User', 'prisma.User.findMany']);
+    expect(labels(roots[0])).toEqual(['prisma.User.findMany', 'prisma.raw.queryRaw', 'prisma.User.findMany']);
     expect(roots[0].children[2].error).toBeInstanceOf(Error);
     uninstall();
+    expect('PRISMA_INSTRUMENTATION' in g).toBe(false);
     roots.length = 0;
-    await tp.track(() => prisma.user.findMany(), { label: 'after' });
+    await tp.track(() => fakePrisma.user.findMany(), { label: 'after' });
     expect(labels(roots[0])).toEqual([]);
   });
 
-  test('prismaExtension stands aside while the client is patched (no double counting)', async () => {
+  test('OpenTelemetry instrumentation that is already there keeps getting its spans', async () => {
+    const seen: string[] = [];
+    const otel = { helper: {
+      isEnabled: () => true, getTraceParent: () => 'tp', dispatchEngineSpans: () => undefined, getActiveContext: () => undefined,
+      runInChildSpan: (o: any, fn: () => unknown) => { seen.push(o.name); return fn(); },
+    } };
+    g.V7_PRISMA_INSTRUMENTATION = otel;
+    const { tp, roots } = setup();
+    const uninstall = instrumentPrisma(tp);
+    expect(helper().isEnabled()).toBe(true);
+    await tp.track(() => fakePrisma.user.findMany(), { label: 'r' });
+    expect(labels(roots[0])).toEqual(['prisma.User.findMany']);
+    expect(seen).toEqual(['operation', 'serialize']);
+    uninstall();
+    expect(g.V7_PRISMA_INSTRUMENTATION).toBe(otel);
+    delete g.V7_PRISMA_INSTRUMENTATION;
+  });
+
+  test('prismaExtension stands aside while the hook is installed (no double counting)', async () => {
     const { tp, roots } = setup();
     const ext = prismaExtension(tp).query.$allModels.$allOperations;
     const call = () => ext({ model: 'User', operation: 'findMany', args: {}, query: async () => [] });
-    const uninstall = instrumentPrisma(tp, FakePrisma);
-    await tp.track(() => call(), { label: 'patched' });
+    const uninstall = instrumentPrisma(tp);
+    await tp.track(() => call(), { label: 'hooked' });
     uninstall();
     await tp.track(() => call(), { label: 'extension only' });
-    expect(roots.map(r => [r.label, labels(r)])).toEqual([['patched', []], ['extension only', ['prisma.User.findMany']]]);
-  });
-
-  test('a client instance works too; unknown objects are ignored', async () => {
-    const { tp, roots } = setup();
-    const client = new FakePrisma();
-    const uninstall = instrumentPrisma(tp, client);
-    await tp.track(() => client.user.findMany(), { label: 'r' });
-    expect(labels(roots[0])).toEqual(['prisma.User.findMany']);
-    uninstall();
-    expect(() => instrumentPrisma(tp, {})()).not.toThrow();
-    expect(() => instrumentPrisma(tp, undefined)()).not.toThrow();
+    expect(roots.map(r => [r.label, labels(r)])).toEqual([['hooked', []], ['extension only', ['prisma.User.findMany']]]);
   });
 });
 

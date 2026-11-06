@@ -111,8 +111,9 @@ export function sqlLabel(sql: unknown): string {
     : sql && typeof (sql as any).sql === 'string' ? (sql as any).sql : '';
   const cleaned = text.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' ').trim();
   const verb = (cleaned.split(/\s+/)[0] || 'query').toUpperCase();
-  const table = /\b(?:from|into|update|join|table)\s+("?[\w.]+"?)/i.exec(cleaned);
-  return table ? `${verb} ${table[1].replace(/"/g, '')}` : verb;
+  // users, public.accounts, "public"."Post", `shop`.`orders`
+  const table = /\b(?:from|into|update|join|table)\s+((?:"[^"]+"|`[^`]+`|[\w$]+)(?:\.(?:"[^"]+"|`[^`]+`|[\w$]+))*)/i.exec(cleaned);
+  return table ? `${verb} ${table[1].replace(/["`]/g, '')}` : verb;
 }
 
 /**
@@ -220,47 +221,59 @@ export function instrumentAwsClient(tp: OptimizedPerformanceMonitor, client: any
   };
 }
 
-/** The prototype that holds Prisma Client's internal `_request`, from a module, class or client */
-function prismaPrototype(target: any): any {
-  if (!target) return undefined;
-  const candidates = [
-    target.PrismaClient && target.PrismaClient.prototype, // require('@prisma/client')
-    typeof target === 'function' ? target.prototype : undefined, // the PrismaClient class
-    target._originalClient && Object.getPrototypeOf(target._originalClient), // a client (extended or not)
-    typeof target === 'object' ? Object.getPrototypeOf(target) : undefined,
-  ];
-  return candidates.find(p => p && typeof p._request === 'function');
-}
+const PRISMA_KEY = Symbol.for('traceperf.prisma.patched');
 
 /**
- * Prisma Client (4 to 6, and newer clients that keep the same runtime):
- * every model call and raw query, "prisma.User.findMany",
- * "prisma.raw.$queryRaw SELECT users". Pass the module, the PrismaClient class
- * or a client; clients made with $extends are covered too.
+ * Prisma Client 5, 6 and 7 (clients generated anywhere, `$extends` and
+ * driver adapters included): every model call and raw query,
+ * "prisma.User.findMany", "prisma.raw.queryRaw".
  *
- *   instrumentPrisma(tp, require('@prisma/client'));
+ * Uses Prisma's tracing hook (the one @prisma/instrumentation fills for
+ * OpenTelemetry), so nothing is patched and Prisma need not be loaded yet.
+ * If OpenTelemetry instrumentation is installed too, it keeps working.
+ *
+ *   instrumentPrisma(tp);
  */
-export function instrumentPrisma(tp: OptimizedPerformanceMonitor, prisma: any, options: DriverOptions = {}): Uninstall {
-  const restores: Uninstall[] = [];
-  patchMethod(prismaPrototype(prisma), '_request', original => function (this: unknown, params: any, ...rest: unknown[]) {
-    const p = params || {};
-    let label: string;
-    // Same labels as prismaExtension: "prisma.User.findMany", "prisma.raw.$queryRaw SELECT users"
-    if (p.model) label = `prisma.${p.model}.${p.action}`;
-    else {
-      const method = String(p.clientMethod || p.action || 'request');
-      const sql = Array.isArray(p.args) ? p.args[0] : p.args;
-      label = /Raw/.test(method) && sql ? `prisma.raw.${method} ${sqlLabel(sql)}` : `prisma.raw.${method}`;
-    }
-    return trackCall(tp, label, options, this, original, [params, ...rest], -1);
-  }, restores);
-  if (restores.length === 0) return () => undefined;
+export function instrumentPrisma(tp: OptimizedPerformanceMonitor, _prisma?: unknown, options: DriverOptions = {}): Uninstall {
   const g = globalThis as any;
-  const key = Symbol.for('traceperf.prisma.patched');
-  g[key] = (g[key] || 0) + 1;
+  if (g[PRISMA_KEY] > 0) return () => undefined;
+  const noop = {
+    isEnabled: () => false,
+    getTraceParent: () => '00-10-10-00',
+    dispatchEngineSpans: () => undefined,
+    getActiveContext: () => undefined,
+    runInChildSpan: (_o: unknown, fn: () => unknown) => fn(),
+  };
+  // Prisma reads globalThis[`V${major}_PRISMA_INSTRUMENTATION`] first, then PRISMA_INSTRUMENTATION
+  const keys = ['PRISMA_INSTRUMENTATION', ...Object.keys(g).filter(k => /^V\d+_PRISMA_INSTRUMENTATION$/.test(k))];
+  const saved = keys.map(k => [k, Object.prototype.hasOwnProperty.call(g, k), g[k]] as const);
+  const wrap = (previous: any) => {
+    const inner = (previous && previous.helper) || noop;
+    return {
+      ...previous,
+      helper: {
+        isEnabled: () => inner.isEnabled(),
+        getTraceParent: (ctx?: unknown) => inner.getTraceParent(ctx),
+        dispatchEngineSpans: (spans: unknown) => inner.dispatchEngineSpans(spans),
+        getActiveContext: () => inner.getActiveContext(),
+        runInChildSpan(o: any, fn: () => unknown) {
+          const opts = typeof o === 'string' ? { name: o } : o || {};
+          if (opts.name !== 'operation') return inner.runInChildSpan(o, fn);
+          const a = opts.attributes || {};
+          const label = a.model ? `prisma.${a.model}.${a.method}` : `prisma.raw.${a.method || a.name || 'query'}`;
+          return trackCall(tp, label, options, undefined, () => inner.runInChildSpan(o, fn), [], -1);
+        },
+      },
+    };
+  };
+  for (const [k, , value] of saved) g[k] = wrap(value);
+  g[PRISMA_KEY] = 1;
   return () => {
-    g[key]--;
-    restores.forEach(r => r());
+    g[PRISMA_KEY] = 0;
+    for (const [k, had, value] of saved) {
+      if (had) g[k] = value;
+      else delete g[k];
+    }
   };
 }
 
