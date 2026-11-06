@@ -146,6 +146,43 @@ export function instrumentMysql2(tp: OptimizedPerformanceMonitor, mysql2: any, o
   return () => restores.forEach(r => r());
 }
 
+/**
+ * mysql (the classic driver, e.g. under TypeORM or Knex): every query,
+ * "mysql SELECT users", for connections and pools (pools use connection.query).
+ *
+ *   instrumentMysql(tp, require('mysql'));
+ */
+export function instrumentMysql(tp: OptimizedPerformanceMonitor, mysql: any, options: DriverOptions = {}): Uninstall {
+  const restores: Uninstall[] = [];
+  let proto: any;
+  try {
+    // The Connection class is not exported; an unconnected connection shows its prototype
+    proto = mysql && typeof mysql.createConnection === 'function' && Object.getPrototypeOf(mysql.createConnection({}));
+  } catch {
+    proto = undefined;
+  }
+  const POOLED = Symbol.for('traceperf.mysql.pooled');
+  patchMethod(proto, 'query', original => function (this: unknown, ...args: unknown[]) {
+    // pool.query hands its own Query object to a connection: tracked by the pool patch
+    const first = args[0] as any;
+    if (first && typeof first === 'object' && first[POOLED]) return original.apply(this, args);
+    return trackCall(tp, `mysql ${sqlLabel(first)}`, options, this, original, args);
+  }, restores);
+  let poolProto: any;
+  try {
+    poolProto = typeof mysql.createPool === 'function' && Object.getPrototypeOf(mysql.createPool({}));
+  } catch {
+    poolProto = undefined;
+  }
+  // Pools: includes waiting for a free connection, and failures to get one
+  patchMethod(poolProto, 'query', original => function (this: unknown, ...args: unknown[]) {
+    const result: any = trackCall(tp, `mysql ${sqlLabel(args[0])}`, options, this, original, args);
+    if (result && typeof result === 'object') result[POOLED] = true;
+    return result;
+  }, restores);
+  return () => restores.forEach(r => r());
+}
+
 const MONGO_COLLECTION_METHODS = [
   'insertOne', 'insertMany', 'findOne', 'updateOne', 'updateMany', 'replaceOne', 'deleteOne', 'deleteMany',
   'countDocuments', 'estimatedDocumentCount', 'distinct', 'findOneAndUpdate', 'findOneAndDelete',

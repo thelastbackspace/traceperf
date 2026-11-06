@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`mysql` (the classic driver)**, used by TypeORM, Knex and many older apps: `instrumentMysql(tp, require('mysql'))`, auto-detected. Connections and pools (`pool.query` includes waiting for a free connection, and failures to get one), labelled like mysql2: `mysql SELECT users`.
 - **`traceperf run` measures in two phases.** After the warm-up it sends `--probe` requests per path (default 10) one at a time, then the concurrent load. Per-request findings (a dominant call, sequential awaits, N+1) come from the one-at-a-time phase: under load every await also waits for the busy event loop, so a 1 ms query on a 60-row table measured 12 ms and was reported as "check this query's plan". Blocking, queueing, errors and CPU cost still come from the load.
 - **Failed responses are called out first:** "2117 of 2117 responses failed (most: 2117× 401 Unauthorized), so the timings below describe error responses", with a hint (`-H` for 401/403, `--path` for 404). An expired token used to give "no issues found".
 
