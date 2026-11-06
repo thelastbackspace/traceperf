@@ -95,6 +95,25 @@ test('--html writes a self-contained report with one bar per call', async () => 
   }
 });
 
+test('the HTML report lists findings, each linked to its time range on the chart', async () => {
+  const { trace, jsonl } = await sample();
+  for (const input of [trace, jsonl]) {
+    const html = report(input, { html: true });
+    expect(html).toContain('Why it was slow');
+    // the failing cache.get is a finding with evidence: link and band share an id
+    const link = html.match(/<a href="#(ev-\d+)">✖ cache\.get in GET \/users failed/);
+    expect(link).not.toBeNull();
+    expect(html).toContain(`<rect id="${link![1]}" class="ev"`);
+    expect(html).toMatch(/rect\.ev:target/);
+    expect(html).not.toMatch(/<script/);
+  }
+  // Findings passed in (as traceperf run does) replace the computed ones; no evidence, no link
+  const html = report(jsonl, { html: true, findings: [{ kind: 'dominant', root: 'x', ms: 1, message: 'given <finding>' }] });
+  expect(html).toContain('<li>● given &lt;finding&gt;</li>');
+  expect(html).not.toContain('class="ev"');
+  expect(report(jsonl, { html: true, findings: [] })).not.toContain('Why it was slow');
+});
+
 function runLog(durations: Record<string, number[]>): string {
   // Synthetic JSON lines: one root per call
   return Object.entries(durations).flatMap(([label, ds]) => ds.map(d => JSON.stringify({

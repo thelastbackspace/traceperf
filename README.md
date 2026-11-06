@@ -584,7 +584,7 @@ render           1.886      1.966   +4.2%  unchanged
 ### Reports and live view
 
 ```bash
-npx traceperf report trace.json --html report.html   # one self-contained file: flame chart, stats, slowest calls
+npx traceperf report trace.json --html report.html   # one self-contained file: findings linked to the flame chart, stats, slowest calls
 npx traceperf watch calls.jsonl                      # live top-style view while the app writes the log
 ```
 

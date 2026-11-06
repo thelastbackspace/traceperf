@@ -45,6 +45,19 @@ describe('explain()', () => {
     expect(findings.filter(f => f.kind === 'blocked').map(f => f.root)).toEqual(['req2']);
   });
 
+  test('each finding points at the time range and calls that show it', () => {
+    const cpu = node('cpu', 50, 30, { async: false, syncDuration: 30 });
+    const req1 = node('req1', 0, 100, { children: [node('db', 0, 50), cpu], selfDuration: 20 });
+    const req2 = node('req2', 10, 100, { children: [node('db', 10, 80)], selfDuration: 20 });
+    const findings = explain([req1, req2]);
+    expect(findings.find(f => f.kind === 'blocking')!.evidence).toEqual({ start: 50, end: 80, labels: ['cpu'] });
+    expect(findings.find(f => f.kind === 'blocked')!.evidence).toEqual({ start: 10, end: 110, labels: ['req2', 'cpu'] });
+    const seq = node('page', 0, 30, { children: [node('a', 0, 10), node('b', 10, 10), node('c', 20, 10)] });
+    expect(explain([seq]).find(f => f.kind === 'sequential')!.evidence).toEqual({ start: 0, end: 30, labels: ['a', 'b', 'c'] });
+    const n1 = node('list', 0, 60, { children: Array.from({ length: 6 }, (_, i) => node('q', 5 + i * 9, 9)) });
+    expect(explain([n1]).find(f => f.kind === 'repeated')!.evidence).toEqual({ start: 5, end: 59, labels: ['q'] });
+  });
+
   test('blocking is attributed to the deepest call that did it', () => {
     const inner = node('parseJson', 0, 40, { async: false, syncDuration: 40 });
     const outer = node('handler', 0, 42, { async: false, syncDuration: 42, children: [inner] });

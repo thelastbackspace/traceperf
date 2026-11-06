@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`traceperf run`:** starts an app with `traceperf/auto`, sends concurrent traffic (`--path`, `-c`, `-d`/`-n`, `--method`; warm-up requests first), then prints statistics and explanations. Without `--path`, use the app yourself and press Ctrl-C. Works with a script (`traceperf run server.js`) or any command (`traceperf run -- npm start`). `--html`, `--output`, `--json`.
+- **Evidence links in the HTML report:** the report now opens with the findings ("Why it was slow"); click one to highlight its time range on the flame chart (no scripts, works from disk). Each finding carries `evidence: { start, end, labels }` in `explain()` and `--json` output.
 - **Known-slow example apps** (`examples/slow-apps/`): one planted cause each; a test checks that `explain` names it.
 - **Blocking code is named even when untracked:** `traceperf run` (and `TRACEPERF_PROFILE_BLOCKING=1` with `traceperf/auto`) samples the CPU during the synchronous part of blocking calls, and `explain` names the function and line (`CPU time: buildReport (server.js:10) 100%`). Native work is named by the calling app function (`hashPassword → pbkdf2Sync`), code V8 inlined into its caller is credited to the inlined function, and garbage-collection pauses are reported as such.
 - `traceperf run` reports **queueing the app can't see**: clients' latency compared with the app's own timings, per path.

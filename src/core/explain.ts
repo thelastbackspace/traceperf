@@ -35,7 +35,21 @@ export interface Finding {
   ms: number;
   /** For blocking / blocked: the call whose synchronous code blocked */
   call?: string;
+  /** Where to look: the time range (same clock as the input) and the calls involved */
+  evidence?: FindingEvidence;
 }
+
+export interface FindingEvidence {
+  start: number;
+  end: number;
+  labels: string[];
+}
+
+const span = (nodes: ExplainNode[], labels: string[]): FindingEvidence => ({
+  start: Math.min(...nodes.map(n => n.startTime)),
+  end: Math.max(...nodes.map(n => n.startTime + n.duration)),
+  labels: [...new Set(labels)],
+});
 
 /** Where a blocking call spent its CPU time (from the sampling profiler) */
 export interface BlockingHotspot {
@@ -142,18 +156,19 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     const rootEnd = root.startTime + root.duration;
 
     // 1. Delayed by blocking code in other top-level calls
-    const byLabel = new Map<string, { ms: number; roots: Set<string> }>();
+    const byLabel = new Map<string, { ms: number; roots: Set<string>; ranges: Blocker[] }>();
     for (const b of blockers) {
       if (b.root === i) continue;
       const ms = overlap(root.startTime, rootEnd, b.start, b.end);
       if (ms <= 0) continue;
-      const entry = byLabel.get(b.label) ?? { ms: 0, roots: new Set<string>() };
+      const entry = byLabel.get(b.label) ?? { ms: 0, roots: new Set<string>(), ranges: [] };
       entry.ms += ms;
+      entry.ranges.push(b);
       entry.roots.add(roots[b.root].label);
       byLabel.set(b.label, entry);
     }
     let blockedTotal = 0;
-    byLabel.forEach(({ ms, roots: from }, label) => {
+    byLabel.forEach(({ ms, roots: from, ranges }, label) => {
       blockedTotal += ms;
       if (ms < minMs) return;
       const others = [...from].filter(r => r !== label);
@@ -164,6 +179,11 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
         root: rootLabel,
         ms,
         call: label,
+        evidence: {
+          start: Math.min(root.startTime, ...ranges.map(r => r.start)),
+          end: Math.max(rootEnd, ...ranges.map(r => r.end)),
+          labels: [rootLabel, label],
+        },
         message: `${rootLabel} waited ~${fmt(ms)} (${pct(ms, root.duration)} of its ${fmt(root.duration)}) while ${label}${where} blocked the event loop${culprit(label, true)}`,
       });
     });
@@ -178,6 +198,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
         root: rootLabel,
         ms,
         call: b.label,
+        evidence: { start: b.start, end: b.end, labels: [b.label] },
         message: `${b.label} ran ${fmt(ms)} of synchronous code, blocking everything else in the process for that long${culprit(b.label, false)}`,
       });
     }
@@ -206,6 +227,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
               root: rootLabel,
               ms: saving,
               group: node.label,
+              evidence: span(run, run.map(k => k.label)),
               message: `${node.label} awaited ${run.length} calls one after another (${shown}: ${fmt(total)}); if they are independent, Promise.all could save up to ~${fmt(saving)}`,
             });
           }
@@ -237,6 +259,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
             kind: 'repeated',
             root: rootLabel,
             ms,
+            evidence: span(kids.filter(k => k.label === label), [label]),
             message: `${node.label} called ${label} ${n} times (${fmt(ms)} total); batching them into one call may help (N+1 pattern)`,
           });
         }
@@ -256,6 +279,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
           kind: 'dominant',
           root: rootLabel,
           ms: k.duration - waited,
+          evidence: span([k], [k.label]),
           message: `${k.label} took ${pct(k.duration, root.duration)} of ${rootLabel} (${fmt(k.duration)} of ${fmt(root.duration)})${note}`,
         });
       }
@@ -267,6 +291,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
         kind: 'dominant',
         root: rootLabel,
         ms: own,
+        evidence: span([root], [rootLabel]),
         message: `${pct(own, root.duration)} of ${rootLabel} (${fmt(own)}) is outside any tracked call; track the code inside it to see where`,
       });
     }
@@ -281,6 +306,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
         kind: 'error',
         root: rootLabel,
         ms: node.duration,
+        evidence: span([node], [node.label]),
         message: `${node === root ? node.label : `${node.label} in ${rootLabel}`} failed after ${fmt(node.duration)}: ${msg}`,
       });
     });
@@ -298,7 +324,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     else {
       g.times++;
       g.roots.add(f.root);
-      if (f.ms > g.ms) Object.assign(g, { ms: f.ms, message: f.message });
+      if (f.ms > g.ms) Object.assign(g, { ms: f.ms, message: f.message, evidence: f.evidence });
     }
   }
   const order: Record<FindingKind, number> = { error: 0, blocked: 1, blocking: 2, repeated: 3, sequential: 4, dominant: 5 };

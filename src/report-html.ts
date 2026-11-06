@@ -5,6 +5,9 @@
  */
 import type { Call } from './cli';
 import type { LabelStats } from './core/stats';
+import type { Finding } from './core/explain';
+
+const ICON: Record<string, string> = { error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●', queued: '⏳' };
 
 const esc = (s: unknown): string => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -20,7 +23,7 @@ function colorFor(label: string, failed: boolean): string {
 
 const ms = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(2)} s` : `${n.toFixed(n < 10 ? 3 : 1)} ms`);
 
-export function renderHtmlReport(calls: Call[], stats: Record<string, LabelStats>, options: { title?: string; top?: number } = {}): string {
+export function renderHtmlReport(calls: Call[], stats: Record<string, LabelStats>, options: { title?: string; top?: number; findings?: Finding[] } = {}): string {
   const title = options.title ?? 'traceperf report';
   const top = options.top ?? 20;
   const width = 1200;
@@ -54,6 +57,26 @@ export function renderHtmlReport(calls: Call[], stats: Record<string, LabelStats
       : '';
     return `<g class="call"><title>${esc(tip)}</title><rect x="${rx.toFixed(1)}" y="${ry}" width="${rw.toFixed(1)}" height="${rowH - 2}" rx="2" fill="${colorFor(c.label, !!c.error)}"/>${text}</g>`;
   }).join('\n');
+
+  // Findings: each links to a band over the chart showing its time range
+  const findings = options.findings || [];
+  const clampX = (t: number) => Math.min(width, Math.max(0, x(t)));
+  const bands = findings.map((f, i) => {
+    const ev = f.evidence;
+    if (!ev || !calls.length || ev.end < start || ev.start > end) return '';
+    const bx = clampX(ev.start);
+    const bw = Math.max(3, clampX(ev.end) - bx);
+    return `<rect id="ev-${i}" class="ev" x="${bx.toFixed(1)}" y="${axisH - 4}" width="${bw.toFixed(1)}" height="${height - axisH + 4}"><title>${esc(`${ev.labels.join(', ')}\n${ms(ev.end - ev.start)}`)}</title></rect>`;
+  });
+  const findingItems = findings.map((f, i) => {
+    const text = `${ICON[f.kind] || '•'} ${esc(f.message)}`;
+    return bands[i]
+      ? `<li><a href="#ev-${i}">${text}</a> <span class="at">at ${esc(ms(f.evidence!.start - start))}, ${esc(f.evidence!.labels.slice(0, 3).join(', '))}</span></li>`
+      : `<li>${text}</li>`;
+  }).join('\n');
+  const findingsSection = findings.length
+    ? `<h2>Why it was slow</h2>\n<ol class="findings">\n${findingItems}\n</ol>\n<p class="meta">Click a finding to highlight its time range on the flame chart.</p>`
+    : '';
 
   const ticks = Array.from({ length: 6 }, (_, i) => {
     const tx = (i / 5) * width;
@@ -92,16 +115,22 @@ export function renderHtmlReport(calls: Call[], stats: Record<string, LabelStats
   th:first-child, td:first-child { text-align: left; } tbody tr:nth-child(odd) { background: var(--row); }
   .slow td:first-child { width: 1%; } .slow td:last-child, .slow th:last-child { text-align: left; white-space: normal; width: auto; } .err { color: #d73a49; }
   .wrap { overflow-x: auto; }
+  ol.findings { padding-left: 20px; margin: 0; } ol.findings li { margin: 4px 0; } ol.findings a { color: inherit; }
+  .at { color: var(--muted); font-size: 12px; }
+  rect.ev { fill: #f0b400; fill-opacity: 0; stroke: none; pointer-events: none; }
+  rect.ev:target { fill-opacity: 0.22; stroke: #f0b400; stroke-width: 2; }
 </style>
 </head>
 <body>
 <main>
 <h1>${esc(title)}</h1>
 <p class="meta">${calls.length} calls · ${Object.keys(stats).length} labels · ${lanes.length} lane${lanes.length === 1 ? '' : 's'} · span ${esc(ms(span))}. Hover a bar for details.</p>
-<h2>Flame chart</h2>
+${findingsSection}
+<h2 id="chart">Flame chart</h2>
 <div class="chart"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="flame chart">
 ${ticks}
 ${rects}
+${bands.join('\n')}
 </svg></div>
 <h2>Statistics (ms)</h2>
 <div class="wrap"><table><thead><tr><th>label</th><th>calls</th><th>errors</th><th>total</th><th>mean</th><th>p50</th><th>p95</th><th>p99</th><th>max</th><th>self mean</th></tr></thead>
