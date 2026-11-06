@@ -10,6 +10,7 @@
  */
 import { ExecutionRecord } from './core/records';
 import { LabelStats, StatsCollector, formatStatsTable } from './core/stats';
+import { explain, ExplainNode, ExplainOptions, formatFindings } from './core/explain';
 import { renderHtmlReport } from './report-html';
 import { createWatcher, WatchOptions } from './watch';
 
@@ -126,6 +127,100 @@ export function parseCalls(text: string): Call[] {
   return calls;
 }
 
+/** Rebuild call trees (for explain) from a Chrome trace or JSON-lines document */
+export function parseTrees(text: string): ExplainNode[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('{') && /"traceEvents"\s*:/.test(trimmed.slice(0, 200))) {
+    const trace = JSON.parse(trimmed);
+    const roots: ExplainNode[] = [];
+    const byTid = new Map<number, any[]>();
+    for (const e of trace.traceEvents || []) {
+      if (e.ph === 'X') byTid.set(e.tid, [...(byTid.get(e.tid) || []), e]);
+    }
+    byTid.forEach(events => {
+      events.sort((a, b) => a.ts - b.ts || b.dur - a.dur);
+      const stack: Array<{ end: number; node: ExplainNode }> = [];
+      for (const e of events) {
+        while (stack.length && stack[stack.length - 1].end <= e.ts) stack.pop();
+        const args = e.args || {};
+        const duration = (e.dur || 0) / 1000;
+        const sync = typeof args.syncMs === 'number' ? args.syncMs : duration;
+        const node: ExplainNode = {
+          label: e.name,
+          startTime: e.ts / 1000,
+          duration,
+          selfDuration: typeof args.selfMs === 'number' ? args.selfMs : duration,
+          syncDuration: sync,
+          async: sync < duration - 0.01, // trace durations are rounded to µs
+          error: typeof args.error === 'string' ? args.error : undefined,
+          children: [],
+        };
+        if (stack.length) stack[stack.length - 1].node.children.push(node);
+        else roots.push(node);
+        stack.push({ end: e.ts + (e.dur || 0), node });
+      }
+    });
+    return roots.sort((a, b) => a.startTime - b.startTime);
+  }
+  const convert = (n: any): ExplainNode => ({
+    label: n.label,
+    startTime: typeof n.start === 'string' ? Date.parse(n.start) : 0,
+    duration: n.durationMs,
+    selfDuration: typeof n.selfMs === 'number' ? n.selfMs : n.durationMs,
+    syncDuration: typeof n.syncMs === 'number' ? n.syncMs : undefined,
+    async: n.async,
+    error: n.error,
+    children: (n.children || []).map(convert),
+  });
+  return trimmed.split('\n').filter(l => l.trim()).map((line, i) => {
+    let node: any;
+    try {
+      node = JSON.parse(line);
+    } catch {
+      throw new Error(`line ${i + 1} is not JSON (expected a Chrome trace or JSON lines)`);
+    }
+    if (typeof node.label !== 'string' || typeof node.durationMs !== 'number') throw new Error(`line ${i + 1} is not a traceperf record`);
+    return convert(node);
+  });
+}
+
+function runExplain(rest: string[], io: { readFile: (p: string) => string; readStdin: () => string; out: (t: string) => void; err: (t: string) => void }): number {
+  let file: string | undefined;
+  let json = false;
+  const options: ExplainOptions = {};
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--json') json = true;
+    else if (arg === '--max') options.max = Number(rest[++i]);
+    else if (arg === '--blocking') options.blockingMs = Number(rest[++i]);
+    else if (arg === '--min') options.minMs = Number(rest[++i]);
+    else if (!file) file = arg;
+    else {
+      io.err(`traceperf: unexpected argument "${arg}"`);
+      return 1;
+    }
+  }
+  if (!file) {
+    io.err(USAGE);
+    return 1;
+  }
+  for (const [name, v] of [['--max', options.max], ['--blocking', options.blockingMs], ['--min', options.minMs]] as const) {
+    if (v !== undefined && !(v >= 0)) {
+      io.err(`traceperf: ${name} expects a number`);
+      return 1;
+    }
+  }
+  try {
+    const findings = explain(parseTrees(file === '-' ? io.readStdin() : io.readFile(file)), options);
+    io.out(json ? JSON.stringify(findings, null, 2) : formatFindings(findings));
+    return 0;
+  } catch (error) {
+    io.err(`traceperf: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
 /** Build the report text (or JSON) from a trace / JSON-lines document */
 export function report(text: string, options: ReportOptions = {}): string {
   const calls = parseCalls(text);
@@ -239,9 +334,11 @@ const USAGE = `Usage:
 
   <file>  a Chrome/Perfetto trace from startTrace().stop(), or JSON lines
           from jsonLinesExporter(); "-" reads stdin
+  traceperf explain <file> [--max 20] [--blocking 10] [--min 5] [--json]
   traceperf watch <calls.jsonl> [--top N] [--sort p95|p99|mean|total|count|max]
                   [--interval ms] [--once]
 
+  explain lists likely causes: blocking code, sequential awaits, N+1 calls
   compare --fail exits with code 1 when any label regressed (for CI)
   watch follows a JSON-lines log as it grows; --once prints one frame`;
 
@@ -259,6 +356,9 @@ export function main(argv: string[], io: {
   }
   if (command === 'compare') {
     return runCompare(rest, io);
+  }
+  if (command === 'explain') {
+    return runExplain(rest, io);
   }
   if (command === 'watch') {
     return runWatchOnce(rest, io);
