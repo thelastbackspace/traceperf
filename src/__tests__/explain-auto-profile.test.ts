@@ -58,6 +58,22 @@ describe('explain()', () => {
     expect(explain([n1]).find(f => f.kind === 'repeated')!.evidence).toEqual({ start: 5, end: 59, labels: ['q'] });
   });
 
+  test('findings carry a concrete fix that matches the cause', () => {
+    const seq = node('page', 0, 30, { children: [node('loadUser', 0, 10), node('loadOrders', 10, 10)] });
+    expect(explain([seq]).find(f => f.kind === 'sequential')!.fix).toBe("if they don't depend on each other, start them together: await Promise.all([loadUser(), loadOrders()])");
+    const n1 = node('list', 0, 60, { children: Array.from({ length: 6 }, (_, i) => node('pg SELECT items', 5 + i * 9, 9)) });
+    expect(explain([n1]).find(f => f.kind === 'repeated')!.fix).toMatch(/IN \(\.\.\.\)/);
+    const rest = node('list', 0, 60, { children: Array.from({ length: 6 }, (_, i) => node('fetchUser', 5 + i * 9, 9)) });
+    expect(explain([rest]).find(f => f.kind === 'repeated')!.fix).toMatch(/DataLoader/);
+    const hash = node('login', 0, 30, { async: false, syncDuration: 30 });
+    const hotspots = { login: [{ functionName: 'hashPassword → pbkdf2Sync', location: 'a.js:3', ms: 28 }, { functionName: '(garbage collection)', location: '', ms: 2 }] };
+    const blocking = explain([hash], { hotspots }).find(f => f.kind === 'blocking')!;
+    expect(blocking.fix).toMatch(/^hashPassword: use the async version/);
+    expect(formatFindings([blocking])).toMatch(/\n {3}fix: hashPassword/);
+    expect(explain([hash]).find(f => f.kind === 'blocking')!.fix).toMatch(/worker_threads/);
+    expect(explain([node('boom', 0, 10, { error: new Error('x') })])[0].fix).toBeUndefined();
+  });
+
   test('blocking is attributed to the deepest call that did it', () => {
     const inner = node('parseJson', 0, 40, { async: false, syncDuration: 40 });
     const outer = node('handler', 0, 42, { async: false, syncDuration: 42, children: [inner] });

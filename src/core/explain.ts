@@ -35,6 +35,8 @@ export interface Finding {
   ms: number;
   /** For blocking / blocked: the call whose synchronous code blocked */
   call?: string;
+  /** What to change, when the cause suggests a concrete fix */
+  fix?: string;
   /** Where to look: the time range (same clock as the input) and the calls involved */
   evidence?: FindingEvidence;
 }
@@ -336,6 +338,8 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     .map(({ times, roots: seenIn, group, ...f }) => {
       const where = [...seenIn];
       const label = where.length > 3 ? `${where.slice(0, 3).join(', ')} and ${where.length - 3} more` : where.join(', ');
+      const fix = suggestFix(f, options.hotspots);
+      if (fix) f = { ...f, fix };
       if (f.kind === 'blocking') {
         const self = where.length === 1 && where[0] === f.message.split(' ran ')[0];
         const count = times > where.length ? `${times} times` : '';
@@ -346,12 +350,62 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     });
 }
 
+const SYNC_FIX: Array<[RegExp, string]> = [
+  [/pbkdf2Sync|scryptSync/, 'use the async version (crypto.pbkdf2 / crypto.scrypt with a callback or util.promisify): it runs on the thread pool'],
+  [/(randomBytes|generateKeyPairSync|hashSync|compareSync)/, 'use the async version of $1 so the work leaves the event loop'],
+  [/readFileSync|writeFileSync|readdirSync|statSync|existsSync/, 'use fs.promises instead of the Sync call, or read it once at startup and cache it'],
+  [/zlib|gzipSync|inflateSync|deflateSync|brotli/i, 'use the async / streaming zlib API instead of the Sync call'],
+  [/JSON\.(stringify|parse)/, 'the payload is large: paginate it, send fewer fields, or stream it (e.g. a streaming JSON encoder)'],
+  [/garbage collection/, 'it allocates a lot: reuse objects/buffers and avoid building large temporary arrays or strings'],
+];
+const SQL = /\b(select|insert|update|delete|pg|mysql|postgres|sql|query|prisma|knex|sequelize|typeorm|drizzle)\b/i;
+
+/** A concrete change for a finding, from its kind, labels and CPU hotspots */
+function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>): string | undefined {
+  const labels = f.evidence?.labels || [];
+  switch (f.kind) {
+    case 'blocked':
+    case 'blocking': {
+      const spots = (f.call && hotspots?.[f.call]) || [];
+      // Only the top culprit decides: a 10% GC share is not the fix for a hot loop
+      for (const h of spots.slice(0, 1)) {
+        const name = `${h.functionName} ${h.location}`;
+        for (const [re, fix] of SYNC_FIX) {
+          const m = name.match(re);
+          if (m) return `${h.functionName.split(' → ')[0]}: ${fix.replace('$1', m[1] || '')}`;
+        }
+      }
+      const at = spots[0] ? `${spots[0].functionName.split(' → ')[0]}${spots[0].location ? ` (${spots[0].location})` : ''}` : f.call;
+      return `move the CPU work in ${at} off the request path: a worker_threads Worker (e.g. a pool like piscina), split it into chunks with setImmediate, or cache its result`;
+    }
+    case 'sequential': {
+      const names = labels.slice(0, 3);
+      if (!names.every(n => /^[\w.$]+$/.test(n))) return `if they don't depend on each other, start them together with Promise.all instead of awaiting each in turn`;
+      return `if they don't depend on each other, start them together: await Promise.all([${names.map(n => `${n}()`).join(', ')}${labels.length > 3 ? ', ...' : ''}])`;
+    }
+    case 'repeated': {
+      const label = labels[0] || '';
+      return SQL.test(label)
+        ? `load them in one query: WHERE id IN (...) (or = ANY($1) in Postgres), or your ORM's include/join; then match results in memory`
+        : `make one batched call instead of one per item (a bulk API, or DataLoader to collect the calls of one tick)`;
+    }
+    case 'dominant':
+      // Outside tracked code: the message says what to do; waited: the blocking finding has the fix
+      if (f.message.includes('outside any tracked call') || f.message.includes('waiting for blocking code')) return undefined;
+      return SQL.test(labels[0] || '')
+        ? `check this query's plan (EXPLAIN ANALYZE) and indexes, or cache its result`
+        : `that is where the time goes: track or profile inside ${labels[0] || 'it'} next`;
+    default:
+      return undefined;
+  }
+}
+
 const ICON: Record<FindingKind, string> = {
   error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●',
 };
 
-/** Render findings as text, one per line */
+/** Render findings as text, one per line (and the fix, if any, below it) */
 export function formatFindings(findings: Finding[]): string {
   if (findings.length === 0) return 'No issues found: nothing blocked, repeated, or ran sequentially in a way worth changing.';
-  return findings.map(f => `${ICON[f.kind]} ${f.message}`).join('\n');
+  return findings.map(f => `${ICON[f.kind] || '•'} ${f.message}${f.fix ? `\n   fix: ${f.fix}` : ''}`).join('\n');
 }
