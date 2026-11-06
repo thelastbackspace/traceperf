@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-06
+
 ### Added
 - **`traceperf run`:** starts an app with `traceperf/auto`, sends concurrent traffic (`--path`, `-c`, `-d`/`-n`, `--method`; warm-up requests first), then prints statistics and explanations. Without `--path`, use the app yourself and press Ctrl-C. Works with a script (`traceperf run server.js`) or any command (`traceperf run -- npm start`). `--html`, `--output`, `--json`.
 - **Fix suggestions:** findings now say what to change (`fix` in `explain()` / `--json`, a `fix:` line in text, under each finding in HTML): `Promise.all` for sequential awaits, `WHERE id IN (...)` / DataLoader for N+1, the async API for `pbkdf2Sync`, `readFileSync` and Sync zlib, a worker thread or chunking for hot loops, `EXPLAIN ANALYZE` for a dominant query.
