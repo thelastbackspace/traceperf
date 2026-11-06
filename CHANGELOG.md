@@ -8,8 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Prisma without code changes:** `traceperf/auto` and `traceperf run` track every Prisma Client call (`prisma.User.findMany`, raw queries as `prisma.raw.$queryRaw SELECT users`), including clients made with `$extends`. `instrumentPrisma(tp, require('@prisma/client'))` does it by hand. `prismaExtension` steps aside when this is active, so calls are not counted twice.
+- **Prisma without code changes (5, 6 and 7):** `traceperf/auto` and `traceperf run` track every Prisma Client call (`prisma.User.findMany`, raw queries as `prisma.raw.queryRaw`) through Prisma's own tracing hook, so it works with clients generated anywhere (Prisma 7's `prisma-client`), `$extends` and driver adapters, and keeps `@prisma/instrumentation` (OpenTelemetry) working. `instrumentPrisma(tp)` does it by hand; `prismaExtension` steps aside when it is active.
 - **better-sqlite3, and so Drizzle on SQLite:** `instrumentBetterSqlite3`; auto-detected. Drizzle on pg or mysql2 was already covered through those drivers.
+### Changed (from running it on Prisma's REST example, not just the planted apps)
+- **Grouped findings show the typical case**, not the worst: one cold start no longer makes every request look slow. The worst is mentioned (`typical shown; worst 191 ms`), and a finding seen in under 5% of 20+ requests is dropped as noise; otherwise its share is given (`in 1 of 172 GET /feed`).
+- "X took 97% of the request" is no longer said of a request that makes a single call, unless that call takes 100 ms or more.
+- Sequential or repeated calls made *inside* a driver or ORM call (Prisma's `include` runs two queries) are not reported: the app can't reorder them.
+- Blocking inside a dependency or Node.js internals gets "the time is inside pg (library code)…" instead of "move it to a worker thread".
+- `traceperf run`: queueing with nothing blocking is described as the app's throughput limit, with what to do about it.
+- SQL labels read quoted names: `"public"."Post"` → `SELECT public.Post` (was `SELECT public`).
+
+### Fixed
+- `traceperf run -- npx tsx app.ts` hung after the load and left the app running: only `npx` was stopped. The app now runs in its own process group, which is stopped as a whole (also on Ctrl-C and when `run` itself is terminated).
+
 - N+1 fixes name the Prisma (`include`, `where: { id: { in } }`) and Drizzle (`inArray`) way.
 
 ## [1.4.0] - 2026-11-06

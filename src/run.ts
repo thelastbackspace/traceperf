@@ -187,7 +187,8 @@ const percentile = (values: number[], p: number): number => {
  * so the server-side duration misses it. Compares the load generator's
  * latency with the request trees, per path.
  */
-export function queueFindings(load: LoadResult, trees: Array<{ label: string; duration: number }>, method: string): Finding[] {
+export function queueFindings(load: LoadResult, trees: Array<{ label: string; duration: number }>, method: string, blocking = true): Finding[] {
+  const rate = load.requests / Math.max(load.durationMs / 1000, 1e-3);
   const findings: Finding[] = [];
   for (const [path, latencies] of Object.entries(load.latency)) {
     const label = `${method} ${normalizePath(path)}`;
@@ -201,7 +202,10 @@ export function queueFindings(load: LoadResult, trees: Array<{ label: string; du
         kind: 'blocked',
         root: label,
         ms: gap * latencies.length,
-        message: `${label} took ${server50.toFixed(1)} ms in the app (median) but clients waited ${client50.toFixed(0)} ms: requests sat queued until the event loop was free (see blocking code above)`,
+        message: blocking
+          ? `${label} took ${server50.toFixed(1)} ms in the app (median) but clients waited ${client50.toFixed(0)} ms: requests sat queued until the event loop was free (see blocking code above)`
+          : `${label} took ${server50.toFixed(1)} ms in the app (median) but clients waited ${client50.toFixed(0)} ms: requests waited their turn while the app's one thread worked through the others (${rate.toFixed(0)} requests/s here)`,
+        ...(blocking ? {} : { fix: `this is the app's throughput limit at this load, not one slow call: run more processes (cluster, more instances) or spend less CPU per request; check the CPU time with --concurrency 1 for comparison` }),
       });
     }
   }
@@ -265,10 +269,14 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   } as Record<string, string>;
   const [cmd, ...cmdArgs] = args.command;
   const quoted = JSON.stringify(deps.registerPath);
+  // Own process group (POSIX): `npx tsx app.ts` is three processes, and
+  // stopping only the first would leave the app running with our stdout
+  const group = process.platform !== 'win32';
   const child = SCRIPT.test(cmd)
-    ? deps.childProcess.spawn(process.execPath, ['--require', deps.registerPath, cmd, ...cmdArgs], { stdio: 'inherit', env })
+    ? deps.childProcess.spawn(process.execPath, ['--require', deps.registerPath, cmd, ...cmdArgs], { stdio: 'inherit', env, detached: group })
     : deps.childProcess.spawn(cmd, cmdArgs, {
       stdio: 'inherit',
+      detached: group,
       shell: process.platform === 'win32',
       env: { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ? env.NODE_OPTIONS + ' ' : ''}--require ${quoted}` },
     });
@@ -288,9 +296,24 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       resolve();
     });
   });
-  // Ctrl-C reaches the app too; we wait for it to exit, then report
-  const onSigint = () => { /* the app exits; the report follows */ };
+  const stop = (signal: NodeJS.Signals) => {
+    if (exited) return;
+    try {
+      if (group && child.pid) process.kill(-child.pid, signal);
+      else child.kill(signal);
+    } catch {
+      child.kill(signal);
+    }
+  };
+  // The app has its own process group, so Ctrl-C is passed on by us; it
+  // exits, then the report follows. If we are terminated, so is the app.
+  const onSigint = () => stop('SIGINT');
+  const onSigterm = () => {
+    stop('SIGTERM');
+    process.exit(143);
+  };
   process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
 
   let load: LoadResult | undefined;
   let skipBytes = 0;
@@ -301,7 +324,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
         deps.err(exited
           ? `traceperf: the app exited (code ${exitCode}) before it started listening`
           : `traceperf: the app did not start an HTTP server within ${args.startTimeoutMs / 1000} s; pass --port`);
-        if (!exited) child.kill('SIGTERM');
+        stop('SIGTERM');
         await exitedPromise;
         return 1;
       }
@@ -316,8 +339,8 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       }
       load = await sendLoad(deps.http, args, port);
       if (!exited) {
-        child.kill('SIGTERM');
-        const timer = setTimeout(() => !exited && child.kill('SIGKILL'), 3000);
+        stop('SIGTERM');
+        const timer = setTimeout(() => stop('SIGKILL'), 3000);
         await exitedPromise;
         clearTimeout(timer);
       }
@@ -327,6 +350,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     }
   } finally {
     process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
   }
 
   let text = '';
@@ -345,7 +369,8 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   }
   const summary = summarise(text, deps, args.max, profiles, process.cwd());
   if (load) {
-    const queued = queueFindings(load, deps.parseTrees(text), args.method);
+    const blocked = summary.findings.some(f => f.kind === 'blocking');
+    const queued = queueFindings(load, deps.parseTrees(text), args.method, blocked);
     // After blocking findings, which explain them
     const after = summary.findings.filter(f => f.kind === 'error' || f.kind === 'blocking').length;
     summary.findings.splice(after, 0, ...queued);
