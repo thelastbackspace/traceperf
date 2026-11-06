@@ -344,6 +344,18 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     worstMs.set(g, sorted[sorted.length - 1].ms);
     Object.assign(g, { ms: typical.ms, message: typical.message, evidence: typical.evidence });
   }
+  // Median duration per label (all depths): to tell a slow call from one that waited
+  const durations = new Map<string, number[]>();
+  roots.forEach(r => walk(r, n => {
+    const list = durations.get(n.label);
+    if (list) list.push(n.duration);
+    else durations.set(n.label, [n.duration]);
+  }));
+  const medians = new Map<string, number>();
+  durations.forEach((list, label) => {
+    list.sort((a, b) => a - b);
+    medians.set(label, list[Math.floor((list.length - 1) / 2)]);
+  });
   // How many top-level calls had each label: a finding in 1 of 2000 requests is an outlier
   const rootCount = new Map<string, number>();
   for (const r of roots) rootCount.set(r.label, (rootCount.get(r.label) || 0) + 1);
@@ -351,7 +363,9 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
   for (const [key, g] of grouped) {
     if (g.kind === 'error') continue;
     const total = rootCount.get(g.root) || 0;
-    const rare = g.kind !== 'blocking' && g.kind !== 'blocked' && g.roots.size === 1 && total >= 20 && g.times / total < 0.05;
+    // Blocking counts per root label too; a rare but long block (a 2 s export) is still worth saying
+    const scope = g.kind === 'blocking' ? Math.max(...[...g.roots].map(r => rootCount.get(r) || 0)) : total;
+    const rare = (g.roots.size === 1 || g.kind === 'blocking') && scope >= 20 && g.times / scope < 0.05 && !((g.kind === 'blocking' || g.kind === 'blocked') && g.ms >= 100);
     if (g.ms < minMs || rare) grouped.delete(key);
     else if (g.kind !== 'blocking' && g.roots.size === 1 && total > g.times) share.set(g, `in ${g.times} of ${total} ${g.root}`);
   }
@@ -366,7 +380,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
       let { times, roots: seenIn, group, all, ...f } = g;
       const where = [...seenIn];
       const label = where.length > 3 ? `${where.slice(0, 3).join(', ')} and ${where.length - 3} more` : where.join(', ');
-      const fix = suggestFix(f, options.hotspots);
+      const fix = suggestFix(f, options.hotspots, medians);
       if (fix) f = { ...f, fix };
       if (f.kind === 'blocking') {
         const self = where.length === 1 && where[0] === f.message.split(' ran ')[0];
@@ -394,7 +408,7 @@ const LIBRARY_CALL = /^(prisma\.|(pg|mysql|sqlite|mongo|redis|aws) )/;
 const SQL = /\b(select|insert|update|delete|pg|mysql|postgres|sql|query|prisma|knex|sequelize|typeorm|drizzle)\b/i;
 
 /** A concrete change for a finding, from its kind, labels and CPU hotspots */
-function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>): string | undefined {
+function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, medians?: Map<string, number>): string | undefined {
   const labels = f.evidence?.labels || [];
   switch (f.kind) {
     case 'blocked':
@@ -429,12 +443,18 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>): s
         ? `load them in one query: WHERE id IN (...) (or = ANY($1) in Postgres), or your ORM's include/join; then match results in memory`
         : `make one batched call instead of one per item (a bulk API, or DataLoader to collect the calls of one tick)`;
     }
-    case 'dominant':
+    case 'dominant': {
       // Outside tracked code: the message says what to do; waited: the blocking finding has the fix
       if (f.message.includes('outside any tracked call') || f.message.includes('waiting for blocking code')) return undefined;
+      // Far slower than the same call usually is: it waited (pool, lock, GC, cold start) rather than worked
+      const usual = medians?.get(labels[0] || '');
+      if (usual !== undefined && f.ms > 3 * usual && f.ms - usual >= 20) {
+        return `${labels[0]} is usually ${fmt(usual)} (median), so the slow ones were waiting, not working: check the connection pool size, locks and GC pauses, or whether it is only the first requests (cold start)`;
+      }
       return SQL.test(labels[0] || '')
         ? `check this query's plan (EXPLAIN ANALYZE) and indexes, or cache its result`
         : `that is where the time goes: track or profile inside ${labels[0] || 'it'} next`;
+    }
     default:
       return undefined;
   }

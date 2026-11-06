@@ -296,8 +296,26 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       resolve();
     });
   });
-  const stop = (signal: NodeJS.Signals) => {
-    if (exited) return;
+  /** Any process of the app's group still running (npx can exit while tsx's child lives on) */
+  const groupAlive = (): boolean => {
+    if (!group || !child.pid) return !exited;
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** Stop the app: the whole group, SIGKILL after a grace period */
+  const stopAndWait = async (): Promise<void> => {
+    stop('SIGTERM');
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && (groupAlive() || !exited)) await new Promise(r => setTimeout(r, 50));
+    if (groupAlive() || !exited) stop('SIGKILL', true);
+    await exitedPromise;
+  };
+  const stop = (signal: NodeJS.Signals, force = false) => {
+    if (exited && !force) return;
     try {
       if (group && child.pid) process.kill(-child.pid, signal);
       else child.kill(signal);
@@ -309,8 +327,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   // exits, then the report follows. If we are terminated, so is the app.
   const onSigint = () => stop('SIGINT');
   const onSigterm = () => {
-    stop('SIGTERM');
-    process.exit(143);
+    stopAndWait().then(() => process.exit(143), () => process.exit(143));
   };
   process.on('SIGINT', onSigint);
   process.on('SIGTERM', onSigterm);
@@ -324,8 +341,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
         deps.err(exited
           ? `traceperf: the app exited (code ${exitCode}) before it started listening`
           : `traceperf: the app did not start an HTTP server within ${args.startTimeoutMs / 1000} s; pass --port`);
-        stop('SIGTERM');
-        await exitedPromise;
+        await stopAndWait();
         return 1;
       }
       deps.err(`traceperf: sending ${args.requests ? `${args.requests} requests` : `${args.durationMs / 1000} s of traffic`} to ${args.paths.join(', ')} on port ${port}, ${args.concurrency} at a time`);
@@ -338,15 +354,12 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
         }
       }
       load = await sendLoad(deps.http, args, port);
-      if (!exited) {
-        stop('SIGTERM');
-        const timer = setTimeout(() => stop('SIGKILL'), 3000);
-        await exitedPromise;
-        clearTimeout(timer);
-      }
+      await stopAndWait();
     } else {
       deps.err('traceperf: app running; use it, then press Ctrl-C for the report');
       await exitedPromise;
+      // The first process can exit before the rest of the group (npx, tsx)
+      if (groupAlive()) await stopAndWait();
     }
   } finally {
     process.removeListener('SIGINT', onSigint);

@@ -223,20 +223,48 @@ export function instrumentAwsClient(tp: OptimizedPerformanceMonitor, client: any
 
 const PRISMA_KEY = Symbol.for('traceperf.prisma.patched');
 
+/** Prisma 4/5: the client class prototype, whose _request every call goes through */
+function prismaLegacyPrototype(mod: any): any {
+  const proto = mod && mod.PrismaClient && mod.PrismaClient.prototype;
+  const version = mod && mod.Prisma && (mod.Prisma.prismaVersion?.client || mod.Prisma.clientVersion);
+  const major = parseInt(String(version || ''), 10);
+  return proto && typeof proto._request === 'function' && major > 0 && major < 6 ? proto : undefined;
+}
+
+function patchPrismaRequest(tp: OptimizedPerformanceMonitor, proto: any, options: DriverOptions): Uninstall {
+  const restores: Uninstall[] = [];
+  patchMethod(proto, '_request', original => function (this: unknown, params: any, ...rest: unknown[]) {
+    const p = params || {};
+    const label = p.model ? `prisma.${p.model}.${p.action}` : `prisma.raw.${p.action || p.clientMethod || 'query'}`;
+    return trackCall(tp, label, options, this, original, [params, ...rest], -1);
+  }, restores);
+  const g = globalThis as any;
+  g[PRISMA_KEY] = 1;
+  return () => {
+    g[PRISMA_KEY] = 0;
+    restores.forEach(r => r());
+  };
+}
+
 /**
  * Prisma Client 5, 6 and 7 (clients generated anywhere, `$extends` and
  * driver adapters included): every model call and raw query,
  * "prisma.User.findMany", "prisma.raw.queryRaw".
  *
- * Uses Prisma's tracing hook (the one @prisma/instrumentation fills for
- * OpenTelemetry), so nothing is patched and Prisma need not be loaded yet.
- * If OpenTelemetry instrumentation is installed too, it keeps working.
+ * Prisma 6+ calls its tracing hook (the one @prisma/instrumentation fills
+ * for OpenTelemetry) for every operation, so that is used: nothing is
+ * patched and Prisma need not be loaded yet; OpenTelemetry keeps working.
+ * Older clients only call it with the `tracing` preview feature, so for
+ * them pass the module and its client class is patched instead.
  *
- *   instrumentPrisma(tp);
+ *   instrumentPrisma(tp);                              // Prisma 6, 7
+ *   instrumentPrisma(tp, require('@prisma/client'));   // Prisma 4, 5 (works for 6+ too)
  */
-export function instrumentPrisma(tp: OptimizedPerformanceMonitor, _prisma?: unknown, options: DriverOptions = {}): Uninstall {
+export function instrumentPrisma(tp: OptimizedPerformanceMonitor, prisma?: unknown, options: DriverOptions = {}): Uninstall {
   const g = globalThis as any;
   if (g[PRISMA_KEY] > 0) return () => undefined;
+  const legacy = prismaLegacyPrototype(prisma);
+  if (legacy) return patchPrismaRequest(tp, legacy, options);
   const noop = {
     isEnabled: () => false,
     getTraceParent: () => '00-10-10-00',

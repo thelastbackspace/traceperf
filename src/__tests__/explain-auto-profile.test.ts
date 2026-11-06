@@ -122,6 +122,15 @@ describe('explain()', () => {
     expect(seq[0].message).toMatch(/seen 5 times, typical shown\)$/);
   });
 
+  test('a call far slower than usual is said to have waited, not to need a better query plan', () => {
+    // 2 of 20 requests: often enough to report, but the call is usually 5 ms next to 10 ms of other work
+    const roots = [140, 140, ...Array(18).fill(5)].map(ms => node('GET /a', 0, ms + 11, { selfDuration: 1, children: [node('prisma.User.findUnique', 0, ms), node('x', ms, 10)] }));
+    const [f] = explain(roots).filter(x => x.kind === 'dominant');
+    expect(f.fix).toMatch(/^prisma\.User\.findUnique is usually 5\.0 ms \(median\), so the slow ones were waiting/);
+    const steady = Array(5).fill(140).map(ms => node('GET /a', 0, ms + 1, { selfDuration: 0.5, children: [node('pg SELECT a', 0, ms), node('x', ms, 0.5)] }));
+    expect(explain(steady).find(x => x.kind === 'dominant')!.fix).toMatch(/EXPLAIN ANALYZE/);
+  });
+
   test('grouped findings show the typical case: one cold start does not make every request look slow', () => {
     // A request that makes one call is always mostly that call: not worth saying unless it is slow
     expect(explain([node('GET /a', 0, 21, { selfDuration: 1, children: [node('db', 0, 20)] })])).toEqual([]);
