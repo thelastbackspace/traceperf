@@ -419,6 +419,8 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       deps.err(`traceperf: sending ${args.requests ? `${args.requests} requests` : `${args.durationMs / 1000} s of traffic`} to ${args.paths.join(', ')} on port ${port}, ${args.concurrency} at a time`);
       if (args.warmup > 0) {
         await sendLoad(deps.http, { ...args, concurrency: 1, requests: args.warmup * args.paths.length }, port);
+        // The last warm-up trees are written just after their responses
+        await new Promise(r => setTimeout(r, 100));
         try {
           skipBytes = fs.statSync(output).size;
         } catch {
@@ -444,7 +446,14 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
 
   let text = '';
   try {
-    text = fs.readFileSync(output).subarray(skipBytes).toString('utf8');
+    const all = fs.readFileSync(output);
+    // If the cut fell inside a tree still being written, start at the next whole line
+    let from = skipBytes;
+    if (from > 0 && from < all.length && all[from - 1] !== 0x0a) {
+      const nl = all.indexOf(0x0a, from);
+      from = nl === -1 ? all.length : nl + 1;
+    }
+    text = all.subarray(from).toString('utf8');
   } catch {
     text = '';
   }
