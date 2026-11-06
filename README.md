@@ -688,7 +688,7 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 
 ## Limitations
 
-- In browsers (and ESM on Node < 20.16), nesting doesn't survive `await`, because there is no `AsyncLocalStorage`.
+- In browsers (and ESM on Node < 20.16), nesting doesn't survive `await`, because there is no `AsyncLocalStorage`. On those Node versions, starting with `--import traceperf/auto` fixes it.
 - The heap delta is the V8 heap difference across the call. Other concurrent work and GC affect it, so treat it as a hint, not an allocation profile.
 - `traceperf/auto` tracks Node's `http`/`https` servers (which Express, Fastify, Koa, Nest and most frameworks use), not `http2` or uWebSockets.js servers. AWS SDK clients still need `instrumentAwsClient(tp, client)`.
 - `explain()` only sees tracked calls: it can say a request was delayed by blocking code, but names the function only if that function is tracked. `profileSlowCalls` finds untracked hot code.

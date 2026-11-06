@@ -17,6 +17,7 @@
  *   TRACEPERF_QUIET=1              no "traceperf: tracking ..." line at startup
  *   TRACEPERF_ENABLED=0            load nothing
  */
+import './node-builtins'; // must stay first: see node-builtins.ts
 import tracePerf from './index';
 import { AUTO_TARGETS, AutoTarget, autoInstrument } from './auto';
 import { explain, formatFindings } from './core/explain';

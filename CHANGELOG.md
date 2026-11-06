@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `instrumentMysql2`: `pool.query()` and `pool.promise().query()` threw "You have tried to call .then() ... on the result of query that is not a promise". Driver command objects are no longer treated as promises, and streaming queries now get their real duration instead of 0 ms.
 
+- ESM apps on Node.js < 20.16 started with `--import traceperf/auto` get request tracking and nesting across `await` (the entry point imports Node built-ins statically).
+
 ### Changed
 - The default instance (`require('traceperf')` / `import tp from 'traceperf'`) is now shared between the CommonJS and ESM builds, so calls tracked through either nest in the same trees.
 
