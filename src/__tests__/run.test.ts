@@ -259,6 +259,32 @@ describe('naming blocking code from CPU profiles', () => {
   });
 });
 
+describe('baselines (calls per request per route)', () => {
+  const { baselineOf, compareBaseline } = jest.requireActual('../run');
+  const n = (label: string, children: any[] = []) => ({ label, children });
+  const orders = (items: number) => n('GET /orders', [n('pg SELECT orders'), ...Array.from({ length: items }, () => n('pg SELECT items'))]);
+
+  it('takes the median count of each call per request', () => {
+    const b = baselineOf([orders(1), orders(1), orders(3), n('GET /health')], []);
+    expect(b.routes).toEqual({
+      'GET /health': { requests: 1, calls: {} },
+      'GET /orders': { requests: 3, calls: { 'pg SELECT items': 1, 'pg SELECT orders': 1 } },
+    });
+    const withN1 = baselineOf([orders(12)], [{ kind: 'repeated', root: 'GET /orders', ms: 50, message: '' }, { kind: 'blocking', root: 'GET /x', ms: 20, message: '' }]);
+    expect(withN1.problems).toEqual(['N+1 in GET /orders']); // blocking is timing, not in the baseline
+  });
+
+  it('flags more calls per request and new problems; reports improvements', () => {
+    const before = baselineOf([orders(1), n('GET /old')], []);
+    const after = baselineOf([orders(12), n('GET /new')], [{ kind: 'repeated', root: 'GET /orders', ms: 50, message: '' }]);
+    const r = compareBaseline(before, after);
+    expect(r.regressions).toEqual(['GET /orders: pg SELECT items 1 → 12 per request (an N+1?)', 'new problem: N+1 in GET /orders']);
+    expect(r.notes).toEqual(['GET /new: new route (not in the baseline)', 'GET /old: not requested in this run']);
+    expect(compareBaseline(after, before).improvements).toEqual(['GET /orders: pg SELECT items 12 → 1 per request', 'fixed: N+1 in GET /orders']);
+    expect(compareBaseline(before, before)).toEqual({ regressions: [], improvements: [], notes: [] });
+  });
+});
+
 describe('statusFinding', () => {
   const { statusFinding } = jest.requireActual('../run');
   const load = (statuses: Record<string, number>, errors = 0) => ({ requests: 10, errors, statuses, durationMs: 1, latency: {} });
