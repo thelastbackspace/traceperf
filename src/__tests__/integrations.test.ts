@@ -3,7 +3,7 @@
  */
 import * as http from 'http';
 import * as path from 'path';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import express from 'express';
 import Fastify from 'fastify';
 import { Hono } from 'hono';
@@ -196,7 +196,6 @@ describe('nestInterceptor (real rxjs observables)', () => {
   test('global interceptor: one root per request labelled by route, nested work', () => {
     // Plain Node process: NestJS 12 is ESM-only
     const root = path.resolve(__dirname, '..', '..');
-    execSync('npm run build:esm', { cwd: root, stdio: 'ignore' });
     const out = execFileSync(process.execPath, [path.join(root, 'test/integrations/nest-check.mjs')], { encoding: 'utf8' });
     expect(JSON.parse(out.trim())).toEqual({ body: { ok: true }, label: 'GET /users/:id', children: ['db.nestUser'] });
   }, 120000);

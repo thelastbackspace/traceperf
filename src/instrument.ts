@@ -204,3 +204,87 @@ export function prismaExtension(tp: OptimizedPerformanceMonitor, options: TrackO
     },
   };
 }
+
+/**
+ * Collapse ids in a URL path so labels stay few: /users/42/orders/9f1c... ->
+ * /users/:id/orders/:id. Numbers, UUIDs, long hex and long mixed tokens count as ids.
+ */
+export function normalizePath(url: string): string {
+  let path = String(url || '/');
+  const q = path.search(/[?#]/);
+  if (q !== -1) path = path.slice(0, q);
+  if (!path) return '/';
+  // Fast path: ids always contain a digit
+  if (!/\d/.test(path)) return path;
+  const segments = path.split('/');
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg && /\d/.test(seg) && isIdSegment(seg)) segments[i] = ':id';
+  }
+  return segments.join('/');
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isIdSegment(seg: string): boolean {
+  if (/^\d+$/.test(seg)) return true;
+  if (seg.length === 36 && UUID.test(seg)) return true;
+  if (seg.length >= 16 && /^[0-9a-f]+$/i.test(seg)) return true;
+  return seg.length >= 20 && /^[A-Za-z0-9_-]+$/.test(seg);
+}
+
+export interface HttpServerInstrumentOptions extends InstrumentOptions {
+  /** Label for a request (default "GET /users/:id", ids collapsed by normalizePath) */
+  labelFor?: (req: { method?: string; url?: string; headers?: Record<string, unknown> }) => string;
+  /** Skip requests for which this returns true, e.g. health checks */
+  ignore?: (req: { method?: string; url?: string }) => boolean;
+}
+
+/**
+ * Track every incoming request of every Node http/https server as a
+ * top-level call, so work done while handling it (queries, fetches, tracked
+ * functions) nests under it, with no framework middleware. Responses with
+ * status >= 500 and connections closed before a response count as failed.
+ */
+export function instrumentHttpServer(tp: OptimizedPerformanceMonitor, options: HttpServerInstrumentOptions = {}): Uninstall {
+  const { errorStatus = 500, labelFor, ignore, ...trackOptions } = options;
+  const restores: Uninstall[] = [];
+  for (const moduleName of ['http', 'https']) {
+    const mod = loadNodeBuiltin(moduleName);
+    const proto = mod && mod.Server && mod.Server.prototype;
+    if (!proto) continue;
+    const original = proto.emit;
+    if (typeof original !== 'function' || original[PATCHED]) continue;
+    const hadOwn = Object.prototype.hasOwnProperty.call(proto, 'emit');
+    const patched = function (this: unknown, event: string, req: any, res: any, ...rest: unknown[]) {
+      if (event !== 'request' || !req || !res || typeof res.once !== 'function' || (ignore && ignore(req))) {
+        return original.call(this, event, req, res, ...rest);
+      }
+      const label = labelFor ? labelFor(req) : `${req.method || 'GET'} ${normalizePath(req.url)}`;
+      const span = tp.start(label, trackOptions);
+      // Disabled or sampled out: nothing to finish
+      if (!span.id) return original.call(this, event, req, res, ...rest);
+      let ended = false;
+      const end = (error?: unknown) => {
+        if (ended) return;
+        ended = true;
+        span.end(error);
+      };
+      res.once('finish', () => end(res.statusCode >= errorStatus ? new Error(`HTTP ${res.statusCode}`) : undefined));
+      res.once('close', () => end(res.writableFinished ? undefined : new Error('connection closed before the response was sent')));
+      try {
+        return span.run(() => original.call(this, event, req, res, ...rest));
+      } catch (error) {
+        end(error);
+        throw error;
+      }
+    };
+    (patched as any)[PATCHED] = original;
+    proto.emit = patched;
+    restores.push(() => {
+      if (proto.emit !== patched) return;
+      if (hadOwn) proto.emit = original;
+      else delete proto.emit;
+    });
+  }
+  return () => restores.forEach(restore => restore());
+}

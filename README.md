@@ -7,6 +7,8 @@
 
 ![traceperf output: a request's call tree with self and sync time, a blocked-event-loop warning and a stats table](docs/assets/terminal.svg)
 
+- **No code changes needed.** `node --require traceperf/auto app.js` tracks every request, outgoing call and database query, and tells you why slow requests were slow when the process exits.
+- **Explains, not just measures.** `traceperf explain` points out blocked event loops (and which function blocked it), awaits that could run in parallel and N+1 queries.
 - **Call trees, not just timers.** Tracked calls inside tracked calls nest automatically, including across `await` on Node.js.
 - **Honest numbers.** You get total, self and synchronous time for each call. Detailed mode flags calls that blocked the event loop.
 - **Production-ready.** Stats are bounded per label (p50/p95/p99), sampling is built in, and `enabled: false` makes tracking a pass-through costing ~40 ns.
@@ -58,6 +60,40 @@ import tp, { createTracePerf, TrackingMode } from 'traceperf';
 
 tp.track(() => JSON.parse('{"a":1}'), { label: 'parse' }); // the default instance
 ```
+
+## No code changes: `traceperf/auto`
+
+Start your app with traceperf preloaded. Every incoming HTTP request becomes a tree, with the outgoing `http`/`fetch` calls and the `pg`, `mysql2`, MongoDB/Mongoose and `ioredis` queries it made nested under it:
+
+<!-- docs:skip -->
+```bash
+node --require traceperf/auto server.js            # CommonJS or ESM apps
+node --import traceperf/auto server.mjs            # ESM, Node.js >= 18.19
+NODE_OPTIONS="--require traceperf/auto" npm start  # through any script
+```
+
+```
+traceperf: tracking server, http, fetch, pg
+└─ GET /users/:id: 84.112 ms
+  ├─ pg SELECT users: 12.331 ms
+  └─ fetch GET billing.internal/invoices: 70.950 ms
+```
+
+When the process exits (including Ctrl-C), it prints the statistics table and an explanation of what made calls slow (see [`traceperf explain`](#why-was-it-slow-traceperf-explain)). Ids in paths are collapsed (`/users/42` becomes `/users/:id`), so labels stay few.
+
+Database clients are only instrumented when your `package.json` lists them. Configure it with environment variables:
+
+| Variable | Effect |
+|---|---|
+| `TRACEPERF_OUTPUT=calls.jsonl` | Append every request tree as JSON lines (for `traceperf report`, `explain`, `compare`, `watch`). Console trees are then off. |
+| `TRACEPERF_THRESHOLD=50` | Only report calls taking at least 50 ms |
+| `TRACEPERF_SAMPLE_RATE=0.1` | Track 10% of requests |
+| `TRACEPERF_IGNORE=^/health` | Regular expression of request paths not to track |
+| `TRACEPERF_DISABLE=http,fetch` | Skip targets: `server`, `http`, `fetch`, `pg`, `mysql2`, `mongodb`, `ioredis` |
+| `TRACEPERF_SILENT=1` / `TRACEPERF_SUMMARY=0` / `TRACEPERF_QUIET=1` | No per-request trees / no exit summary / no startup line |
+| `TRACEPERF_ENABLED=0` | Load nothing |
+
+Your own `tp.track(...)` calls (with `require('traceperf')` or `import tp from 'traceperf'`) nest inside the request trees too. In code, the same thing is `autoInstrument(tp)`, and request tracking alone is `instrumentHttpServer(tp)`. Don't combine it with a framework middleware from [Frameworks](#frameworks), or each request is tracked twice.
 
 ## Ways to track
 
@@ -299,6 +335,43 @@ db.query       40       0     116.9  2.922  3.124  4.189  4.782  4.782      2.92
 
 `count`, `errors`, `total`, `min` and `max` are exact. Percentiles come from a 512-sample reservoir per label. Past 1,000 distinct labels, new labels are folded into `(other)`. `resetStats()` starts a new window.
 
+## Why was it slow? `traceperf explain`
+
+`explain()` reads finished trees and says, in plain English, what probably made them slow:
+
+```javascript
+const { createTracePerf, explain, formatFindings } = require('traceperf');
+const roots = [];
+const tp = createTracePerf({ silent: true, onComplete: r => roots.push(r) });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const getUser = tp.createTrackable(() => sleep(20), { label: 'getUser' });
+const getOrders = tp.createTrackable(() => sleep(30), { label: 'getOrders' });
+const getPrice = tp.createTrackable(() => sleep(2), { label: 'pg SELECT prices' });
+
+await tp.track(async () => {
+  await getUser();
+  await getOrders();
+  for (let i = 0; i < 10; i++) await getPrice();
+}, { label: 'GET /dashboard' });
+
+console.log(formatFindings(explain(roots)));
+```
+
+```
+⇉ GET /dashboard awaited 12 calls one after another (getUser, getOrders, pg SELECT prices, pg SELECT prices, ...: 78 ms); if they are independent, Promise.all could save up to ~47 ms
+🔁 GET /dashboard called pg SELECT prices 10 times (27 ms total); batching them into one call may help (N+1 pattern)
+```
+
+It looks for:
+
+- **Blocked event loop:** "req2 waited ~60 ms while `cpu` in req1, req3 blocked the event loop". Synchronous work in one request delays every other request, and it names the function that did it.
+- **Sequential awaits** that could run in parallel, with the most time `Promise.all` could save.
+- **Repeated calls** under one parent (N+1 queries).
+- **A dominant child**, or time spent outside any tracked call.
+- **Errors**, reported once, where they happened.
+
+The same works on saved data: `traceperf explain calls.jsonl` (or a Chrome trace, or `-` for stdin), with `--json`, `--max N`, `--blocking ms` and `--min ms`. Findings are heuristics with their numbers, so check them against the tree before acting on them.
+
 ## Getting data out
 
 ### Perfetto / Chrome trace
@@ -435,6 +508,8 @@ Overhead per call of a trivial function on Node 24 (`npm run bench`). CI fails t
 
 That's fine for request handlers, database calls and anything else that takes milliseconds. For tight loops called millions of times, track the loop rather than each iteration, or use `sampleRate`.
 
+Safe settings, what each feature costs and how to roll traceperf out to a service are in [docs/production.md](docs/production.md).
+
 ### Analyzing saved data: `traceperf report`
 
 ```bash
@@ -497,6 +572,29 @@ true string
 ```
 
 This uses V8's sampling heap profiler through `node:inspector` and counts objects that were collected again (on Node 20+, see `countsCollected`).
+
+### CPU hotspots for slow calls
+
+Tracking shows *which call* was slow; `profileSlowCalls` shows *which lines* were busy during it, including code you never wrapped. It runs the V8 sampling profiler and, for every top-level call over the threshold, reports the functions that used the CPU:
+
+<!-- docs:skip -->
+```javascript
+const { createTracePerf, profileSlowCalls, formatHotspots } = require('traceperf');
+const tp = createTracePerf();
+tp.use(profileSlowCalls({
+  threshold: 200,                                      // ms
+  onProfile: (call, profile) => console.log(`${call.label}\n${formatHotspots(profile)}`),
+}));
+```
+
+```
+POST /import: 438 ms
+    315.0 ms  parseRows  /app/src/csv.js:18
+    121.1 ms  hashRow  /app/src/hash.js:4
+  cpu 436.0 ms, idle 0.0 ms, gc 2.4 ms
+```
+
+`idle` is time spent waiting for I/O or timers, so a slow call with a high idle time is waiting on something rather than computing. Results arrive when the profiler window closes (`window`, default 2 s; `flush()` forces it). Samples are process-wide, so concurrent work during the call shows up too. Sampling costs a few percent of CPU: turn it on while investigating, or on some instances only. Node.js only; `profiler.available` is false elsewhere.
 
 ### Event-loop delay
 
@@ -578,9 +676,9 @@ Workers deliberately coarsen timers (time only advances on I/O), so durations th
 | `performance.timerify` (Node) | no | no | via observer | yes | no | some |
 | clinic.js / 0x | sampled flame graph | n/a | no | no (offline profiling) | own UI | run app under the tool |
 | OpenTelemetry SDK | yes (spans) | yes | via backend | yes | everywhere | SDK + exporter + collector |
-| **traceperf** | yes | yes (Node) | yes | yes (sampling, kill switch) | Perfetto, OTel, JSON | one import |
+| **traceperf** | yes | yes (Node) | yes | yes (sampling, kill switch) | Perfetto, OTel, Prometheus, JSON | none (`--require traceperf/auto`) or one import |
 
-Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to look. Use traceperf when you want to measure specific functions, requests or spans continuously, in development and in production. If you already run OpenTelemetry, traceperf can feed it.
+Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to look, or let `profileSlowCalls` run one only around slow calls. Use traceperf when you want to measure specific functions, requests or spans continuously, in development and in production. If you already run OpenTelemetry, traceperf can feed it. A longer, honest comparison is in [docs/comparison.md](docs/comparison.md).
 
 ## Compatibility
 
@@ -590,9 +688,10 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 
 ## Limitations
 
-- In browsers (and ESM on Node < 20.16), nesting doesn't survive `await`, because there is no `AsyncLocalStorage`.
+- In browsers (and ESM on Node < 20.16), nesting doesn't survive `await`, because there is no `AsyncLocalStorage`. On those Node versions, starting with `--import traceperf/auto` fixes it.
 - The heap delta is the V8 heap difference across the call. Other concurrent work and GC affect it, so treat it as a hint, not an allocation profile.
-- `require('traceperf')` and `import 'traceperf'` each have their own default instance. Instances you create with `createTracePerf()` are unaffected.
+- `traceperf/auto` tracks Node's `http`/`https` servers (which Express, Fastify, Koa, Nest and most frameworks use), not `http2` or uWebSockets.js servers. AWS SDK clients still need `instrumentAwsClient(tp, client)`.
+- `explain()` only sees tracked calls: it can say a request was delayed by blocking code, but names the function only if that function is tracked. `profileSlowCalls` finds untracked hot code.
 - In the default OpenTelemetry mode, spans are created when the top-level call finishes. Use `{ live: true }` if other instrumentation's spans should nest inside traceperf's.
 - `fetch` instrumentation times the request until the response headers arrive, not the time spent reading the body.
 

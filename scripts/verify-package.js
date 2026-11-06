@@ -111,6 +111,27 @@ require('fs').writeFileSync('calls.jsonl', lines.join('\\n'));
   if (!/6 calls, 2 labels/.test(out)) throw new Error(`unexpected CLI output:\n${out}`);
 });
 
+check('node --require traceperf/auto (zero-code request tracking)', () => {
+  const dir = path.join(work, 'cjs');
+  fs.writeFileSync(path.join(dir, 'server.js'), `
+const http = require('http');
+const server = http.createServer((req, res) => setTimeout(() => res.end('ok'), 5)).listen(0, '127.0.0.1', () => {
+  http.get('http://127.0.0.1:' + server.address().port + '/users/42', res => {
+    res.resume();
+    res.on('end', () => server.close());
+  });
+});
+`);
+  const out = path.join(dir, 'auto.jsonl');
+  execFileSync(process.execPath, ['--require', 'traceperf/auto', 'server.js'], {
+    cwd: dir,
+    env: Object.assign({}, process.env, { TRACEPERF_OUTPUT: out, TRACEPERF_QUIET: '1' }),
+    stdio: 'pipe',
+  });
+  const labels = fs.readFileSync(out, 'utf8').trim().split('\n').map(l => JSON.parse(l).label);
+  if (labels.indexOf('GET /users/:id') === -1) throw new Error(`no request tree in ${JSON.stringify(labels)}`);
+});
+
 if (!runtimeOnly) {
   const tsc = path.join(root, 'node_modules', '.bin', isWin ? 'tsc.cmd' : 'tsc');
   const esbuild = path.join(root, 'node_modules', '.bin', isWin ? 'esbuild.cmd' : 'esbuild');

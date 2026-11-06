@@ -17,7 +17,7 @@
     <header>
         <div class="container">
             <h1>TracePerf</h1>
-            <p class="tagline">See where the time goes: call trees in development, cheap stats in production, export to Perfetto and OpenTelemetry</p>
+            <p class="tagline">See where the time goes, and why: call trees in development, cheap stats in production, plain-English explanations of slow requests</p>
             <div class="buttons">
                 <a href="https://github.com/thelastbackspace/traceperf" class="button primary">GitHub</a>
                 <a href="#getting-started" class="button secondary">Get Started</a>
@@ -26,40 +26,55 @@
     </header>
 
     <main class="container">
+        <section id="thirty-seconds">
+            <h2>Try it in 30 seconds, without changing your code</h2>
+            <pre><code>npm install traceperf
+node --require traceperf/auto server.js</code></pre>
+            <p>Every request becomes a call tree with its HTTP calls and database queries nested inside. Stop the server and you get per-route statistics and an explanation of what made requests slow:</p>
+            <pre class="output"><code>└─ GET /users/:id: 84.112 ms
+  ├─ pg SELECT users: 12.331 ms
+  └─ fetch GET billing.internal/invoices: 70.950 ms
+
+🔥 renderPdf ran 30 ms of synchronous code, blocking everything else in the process for that long
+⏳ GET /users/:id waited ~60 ms while renderPdf in POST /export blocked the event loop
+⇉ GET /dashboard awaited 3 calls one after another; Promise.all could save up to ~47 ms
+🔁 GET /orders called pg SELECT prices 10 times; batching them into one call may help (N+1 pattern)</code></pre>
+        </section>
+
         <section id="features">
             <h2>Features</h2>
             <div class="feature-grid">
                 <div class="feature-card">
-                    <h3>⚡️ High-Performance Tracking</h3>
-                    <p>Track function execution time with minimal overhead, even in production environments.</p>
+                    <h3>🌳 Call trees across await</h3>
+                    <p>Tracked calls inside tracked calls nest automatically, even across concurrent async requests. Total, self and synchronous time for every call.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🧠 Memory Usage Monitoring</h3>
-                    <p>Track memory consumption of functions and identify potential memory leaks.</p>
+                    <h3>💡 Explains causes</h3>
+                    <p><code>traceperf explain</code> finds blocked event loops (and the function that blocked), sequential awaits and N+1 queries.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🔍 Flexible Tracking Modes</h3>
-                    <p>Choose between performance, balanced, and detailed tracking based on your needs.</p>
+                    <h3>🔌 Zero-code coverage</h3>
+                    <p>HTTP servers, fetch, pg, mysql2, MongoDB/Mongoose, ioredis, Prisma, AWS SDK. Express, Fastify, Hono, Koa, NestJS.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>📊 Execution Flow Visualization</h3>
-                    <p>Visualize execution flows with intelligent formatting to identify bottlenecks.</p>
+                    <h3>🔥 CPU hotspots for slow calls</h3>
+                    <p><code>profileSlowCalls</code> samples the CPU and names the functions and lines that were busy during slow calls.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>📦 Nested Function Tracking</h3>
-                    <p>Track function calls within other functions to understand complex execution flows.</p>
+                    <h3>📈 Production statistics</h3>
+                    <p>p50/p95/p99 per label with bounded memory, sampling and a ~45 ns kill switch. Prometheus endpoint included.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>⏱️ Configurable Thresholds</h3>
-                    <p>Focus on functions that exceed specific execution time thresholds.</p>
+                    <h3>🚦 Regressions in CI</h3>
+                    <p><code>traceperf compare before.jsonl after.jsonl --fail</code> fails the build when something got slower.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🔄 Sampling Control</h3>
-                    <p>Adjust sampling rates to minimize performance impact in production.</p>
+                    <h3>📤 Gets data out</h3>
+                    <p>Chrome/Perfetto traces, OpenTelemetry spans, JSON lines, HTML flame-chart reports, a live terminal view and Chrome DevTools tracks.</p>
                 </div>
                 <div class="feature-card">
-                    <h3>🌐 Browser Support</h3>
-                    <p>Use the same powerful tracking in browser environments.</p>
+                    <h3>🌐 Runs everywhere</h3>
+                    <p>Node.js 14+, Bun, Deno, Cloudflare Workers, Vercel Edge and browsers. CommonJS, ESM and TypeScript. No dependencies.</p>
                 </div>
             </div>
         </section>
@@ -214,6 +229,12 @@ browserTracker.track(() => {
         <section id="documentation">
             <h2>Documentation</h2>
             <p>For complete documentation and examples, please visit the <a href="https://github.com/thelastbackspace/traceperf">GitHub repository</a>.</p>
+            <ul>
+                <li><a href="https://github.com/thelastbackspace/traceperf/blob/main/docs/production.md">Running traceperf in production</a>: safe settings, measured costs, rollout</li>
+                <li><a href="https://github.com/thelastbackspace/traceperf/blob/main/docs/comparison.md">Compared with clinic.js, --cpu-prof, OpenTelemetry and APM agents</a></li>
+                <li><a href="https://github.com/thelastbackspace/traceperf/blob/main/docs/benchmarks.md">Overhead benchmarks</a></li>
+                <li><a href="api/">API reference</a></li>
+            </ul>
             <p>View examples at <a href="https://github.com/thelastbackspace/traceperf/tree/main/examples">examples directory</a>.</p>
         </section>
     </main>

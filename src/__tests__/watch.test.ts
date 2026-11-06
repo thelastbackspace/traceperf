@@ -1,4 +1,4 @@
-import { spawn, execSync } from 'child_process';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -39,7 +39,6 @@ test('watch --once prints a frame; argument errors', () => {
 
 test('live: follows the file as it grows and survives truncation', async () => {
   const root = path.resolve(__dirname, '..', '..');
-  execSync('npm run build', { cwd: root, stdio: 'ignore' });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traceperf-watch-'));
   const file = path.join(dir, 'calls.jsonl');
   fs.writeFileSync(file, `${line('first', 5)}\n`);

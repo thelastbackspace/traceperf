@@ -14,6 +14,9 @@
     "*": {
       "browser": [
         "dist/browser.d.ts"
+      ],
+      "auto": [
+        "dist/register.d.ts"
       ]
     }
   },
@@ -36,6 +39,16 @@
       "require": {
         "types": "./dist/browser.d.ts",
         "default": "./dist/browser.js"
+      }
+    },
+    "./auto": {
+      "import": {
+        "types": "./dist/esm/register.d.ts",
+        "default": "./dist/esm/register.js"
+      },
+      "require": {
+        "types": "./dist/register.d.ts",
+        "default": "./dist/register.js"
       }
     },
     "./package.json": "./package.json"
@@ -139,5 +152,8 @@
     "typedoc": "^0.28.20",
     "typescript": "^5.8.2"
   },
-  "sideEffects": false
+  "sideEffects": [
+    "./dist/register.js",
+    "./dist/esm/register.js"
+  ]
 }

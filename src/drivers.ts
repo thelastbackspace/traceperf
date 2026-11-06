@@ -16,6 +16,11 @@ export type DriverOptions = Omit<TrackOptions, 'label'>;
 const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
   value !== null && (typeof value === 'object' || typeof value === 'function') && typeof (value as any).then === 'function';
 
+const isCommandObject = (value: unknown): boolean =>
+  value !== null && typeof value === 'object' && !(value instanceof Promise) &&
+  typeof (value as any).once === 'function' && typeof (value as any).on === 'function' &&
+  typeof (value as any).emit === 'function';
+
 /**
  * Run one driver call as a tracked span, whether it reports completion via
  * a callback (last argument), a returned promise, or synchronously.
@@ -56,6 +61,21 @@ function trackCall(
   } catch (error) {
     end(error);
     throw error;
+  }
+  // Command objects (mysql2 Query, pg Query) are event emitters; some, like
+  // mysql2's, have a .then() that throws. Finish on their completion
+  // callback or 'end' event instead of treating them as promises.
+  if (isCommandObject(result)) {
+    const command = result as any;
+    if (typeof command.onResult === 'function') {
+      const onResult = command.onResult;
+      command.onResult = function (this: unknown, error: unknown, ...rest: unknown[]) {
+        end(error || undefined);
+        return onResult.call(this, error, ...rest);
+      };
+    }
+    command.once('end', () => end());
+    return result;
   }
   if (isPromiseLike(result)) {
     result.then(() => end(), error => end(error));
