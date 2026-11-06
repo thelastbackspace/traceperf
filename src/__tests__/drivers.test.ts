@@ -18,6 +18,7 @@ import {
   instrumentBetterSqlite3,
   instrumentPrisma,
   prismaExtension,
+  instrumentMysql,
   instrumentMysql2,
   instrumentPg,
   instrumentRedis,
@@ -187,6 +188,32 @@ describe('instrumentMysql2 (real mysql2 client)', () => {
     }
     const job = roots.find(r => r.label === 'job')!;
     expect(labels(job)).toEqual(['mysql SELECT users', 'mysql UPDATE orders']);
+    job.children.forEach(c => expect(c.error).toBeDefined());
+  });
+});
+
+describe('instrumentMysql (real mysql client)', () => {
+  test('connection and pool failures are tracked as failed queries', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mysql = require('mysql');
+    const { tp, roots } = setup();
+    const uninstall = instrumentMysql(tp, mysql);
+    expect(instrumentMysql(tp, mysql)).toBeInstanceOf(Function); // idempotent
+    try {
+      const conn = mysql.createConnection({ host: '127.0.0.1', port: 1, user: 'x', connectTimeout: 2000 });
+      conn.on('error', () => undefined);
+      const pool = mysql.createPool({ host: '127.0.0.1', port: 1, user: 'x', connectTimeout: 2000 });
+      await tp.track(async () => {
+        await new Promise<void>(resolve => conn.query('SELECT * FROM users WHERE id = ?', [1], () => resolve()));
+        await new Promise<void>(resolve => pool.query('INSERT INTO orders (a) VALUES (1)', () => resolve()));
+      }, { label: 'job' });
+      pool.end(() => undefined);
+    } finally {
+      uninstall();
+    }
+    const job = roots.find(r => r.label === 'job')!;
+    expect(labels(job)[0]).toBe('mysql SELECT users');
+    expect(labels(job)).toContain('mysql INSERT orders');
     job.children.forEach(c => expect(c.error).toBeDefined());
   });
 });
