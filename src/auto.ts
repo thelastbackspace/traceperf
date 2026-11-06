@@ -12,11 +12,11 @@
 import type { OptimizedPerformanceMonitor } from './core/optimized-performance-monitor';
 import { loadNodeBuiltin } from './core/env';
 import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, Uninstall } from './instrument';
-import { instrumentMongo, instrumentMysql2, instrumentPg, instrumentRedis } from './drivers';
+import { instrumentBetterSqlite3, instrumentMongo, instrumentMysql2, instrumentPg, instrumentPrisma, instrumentRedis } from './drivers';
 
-export type AutoTarget = 'server' | 'http' | 'fetch' | 'pg' | 'mysql2' | 'mongodb' | 'ioredis';
+export type AutoTarget = 'server' | 'http' | 'fetch' | 'pg' | 'mysql2' | 'mongodb' | 'ioredis' | 'prisma' | 'better-sqlite3';
 
-export const AUTO_TARGETS: AutoTarget[] = ['server', 'http', 'fetch', 'pg', 'mysql2', 'mongodb', 'ioredis'];
+export const AUTO_TARGETS: AutoTarget[] = ['server', 'http', 'fetch', 'pg', 'mysql2', 'mongodb', 'ioredis', 'prisma', 'better-sqlite3'];
 
 export interface AutoInstrumentOptions {
   /** Targets to skip, e.g. ['http'] */
@@ -94,6 +94,8 @@ export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoIns
     const load = (name: string) => appRequire(name);
     if (deps.names.has('pg')) add('pg', () => instrumentPg(tp, load('pg')));
     if (deps.names.has('mysql2')) add('mysql2', () => instrumentMysql2(tp, load('mysql2')));
+    if (deps.names.has('better-sqlite3')) add('better-sqlite3', () => instrumentBetterSqlite3(tp, load('better-sqlite3')));
+    if (deps.names.has('@prisma/client')) add('prisma', () => instrumentPrisma(tp, load('@prisma/client')));
     if (deps.names.has('ioredis')) add('ioredis', () => instrumentRedis(tp, load('ioredis')));
     if (deps.names.has('mongodb')) add('mongodb', () => instrumentMongo(tp, load('mongodb')));
     else if (deps.names.has('mongoose')) {

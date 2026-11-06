@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Prisma without code changes:** `traceperf/auto` and `traceperf run` track every Prisma Client call (`prisma.User.findMany`, raw queries as `prisma.raw.$queryRaw SELECT users`), including clients made with `$extends`. `instrumentPrisma(tp, require('@prisma/client'))` does it by hand. `prismaExtension` steps aside when this is active, so calls are not counted twice.
+- **better-sqlite3, and so Drizzle on SQLite:** `instrumentBetterSqlite3`; auto-detected. Drizzle on pg or mysql2 was already covered through those drivers.
+- N+1 fixes name the Prisma (`include`, `where: { id: { in } }`) and Drizzle (`inArray`) way.
+
 ## [1.4.0] - 2026-11-06
 
 ### Added

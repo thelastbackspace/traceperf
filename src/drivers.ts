@@ -219,3 +219,76 @@ export function instrumentAwsClient(tp: OptimizedPerformanceMonitor, client: any
     delete client[PATCHED];
   };
 }
+
+/** The prototype that holds Prisma Client's internal `_request`, from a module, class or client */
+function prismaPrototype(target: any): any {
+  if (!target) return undefined;
+  const candidates = [
+    target.PrismaClient && target.PrismaClient.prototype, // require('@prisma/client')
+    typeof target === 'function' ? target.prototype : undefined, // the PrismaClient class
+    target._originalClient && Object.getPrototypeOf(target._originalClient), // a client (extended or not)
+    typeof target === 'object' ? Object.getPrototypeOf(target) : undefined,
+  ];
+  return candidates.find(p => p && typeof p._request === 'function');
+}
+
+/**
+ * Prisma Client (4 to 6, and newer clients that keep the same runtime):
+ * every model call and raw query, "prisma.User.findMany",
+ * "prisma.raw.$queryRaw SELECT users". Pass the module, the PrismaClient class
+ * or a client; clients made with $extends are covered too.
+ *
+ *   instrumentPrisma(tp, require('@prisma/client'));
+ */
+export function instrumentPrisma(tp: OptimizedPerformanceMonitor, prisma: any, options: DriverOptions = {}): Uninstall {
+  const restores: Uninstall[] = [];
+  patchMethod(prismaPrototype(prisma), '_request', original => function (this: unknown, params: any, ...rest: unknown[]) {
+    const p = params || {};
+    let label: string;
+    // Same labels as prismaExtension: "prisma.User.findMany", "prisma.raw.$queryRaw SELECT users"
+    if (p.model) label = `prisma.${p.model}.${p.action}`;
+    else {
+      const method = String(p.clientMethod || p.action || 'request');
+      const sql = Array.isArray(p.args) ? p.args[0] : p.args;
+      label = /Raw/.test(method) && sql ? `prisma.raw.${method} ${sqlLabel(sql)}` : `prisma.raw.${method}`;
+    }
+    return trackCall(tp, label, options, this, original, [params, ...rest], -1);
+  }, restores);
+  if (restores.length === 0) return () => undefined;
+  const g = globalThis as any;
+  const key = Symbol.for('traceperf.prisma.patched');
+  g[key] = (g[key] || 0) + 1;
+  return () => {
+    g[key]--;
+    restores.forEach(r => r());
+  };
+}
+
+/**
+ * better-sqlite3 (and Drizzle on it): every statement, "sqlite SELECT users".
+ * These calls are synchronous, so slow ones show up as blocking.
+ *
+ *   instrumentBetterSqlite3(tp, require('better-sqlite3'));
+ */
+export function instrumentBetterSqlite3(tp: OptimizedPerformanceMonitor, Database: any, options: DriverOptions = {}): Uninstall {
+  const restores: Uninstall[] = [];
+  const proto = Database && Database.prototype;
+  const patchStatement = (statement: any) => {
+    // The Statement class is not exported: patch its prototype on first prepare()
+    const sp = statement && Object.getPrototypeOf(statement);
+    for (const method of ['run', 'get', 'all', 'iterate']) {
+      patchMethod(sp, method, original => function (this: any, ...args: unknown[]) {
+        return trackCall(tp, `sqlite ${sqlLabel(this && this.source)}`, options, this, original, args, -1);
+      }, restores);
+    }
+  };
+  patchMethod(proto, 'prepare', original => function (this: unknown, ...args: unknown[]) {
+    const statement = original.apply(this, args);
+    patchStatement(statement);
+    return statement;
+  }, restores);
+  patchMethod(proto, 'exec', original => function (this: unknown, ...args: unknown[]) {
+    return trackCall(tp, `sqlite ${sqlLabel(args[0])}`, options, this, original, args, -1);
+  }, restores);
+  return () => restores.forEach(r => r());
+}
