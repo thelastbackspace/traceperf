@@ -253,6 +253,35 @@ export interface HttpServerInstrumentOptions extends InstrumentOptions {
  */
 export const ROUTE = Symbol.for('traceperf.route');
 
+const KOA_CONTEXT = Symbol.for('traceperf.koa.context');
+
+/**
+ * Koa with @koa/router or koa-router: label requests by their route
+ * ("GET /users/:id"). Links each request to its Koa context, where the
+ * router records the matched route.
+ *
+ *   labelKoaRoutes(require('koa'));
+ */
+export function labelKoaRoutes(Koa: any): Uninstall {
+  const proto = Koa && (Koa.default || Koa).prototype;
+  const original = proto && proto.createContext;
+  if (typeof original !== 'function' || original[PATCHED]) return () => undefined;
+  const patched = function (this: unknown, req: any, res: unknown) {
+    const ctx = original.call(this, req, res);
+    try {
+      if (req && typeof req === 'object') req[KOA_CONTEXT] = ctx;
+    } catch {
+      // never break the app
+    }
+    return ctx;
+  };
+  (patched as any)[PATCHED] = original;
+  proto.createContext = patched;
+  return () => {
+    if (proto.createContext === patched) proto.createContext = original;
+  };
+}
+
 /**
  * Fastify (3, 4, 5): label requests by their route ("GET /api/articles/:slug").
  * Wraps the fastify() factory so every instance gets an onRequest hook; returns
@@ -304,7 +333,9 @@ export function instrumentHttpServer(tp: OptimizedPerformanceMonitor, options: H
         if (ended) return;
         ended = true;
         // A framework set the matched route (traceperf/auto does it for Fastify)
-        const marked = !labelFor ? req[ROUTE] : undefined;
+        // ... or the Koa context, where @koa/router puts it
+        const koa = req[KOA_CONTEXT];
+        const marked = labelFor ? undefined : req[ROUTE] || (koa && typeof koa._matchedRoute === 'string' ? koa._matchedRoute : undefined);
         if (typeof marked === 'string' && marked) span.setLabel(`${req.method || 'GET'} ${marked}`);
         // Express (4, 5, and Nest on it) knows the route: "/api/articles/:slug", not the slug itself
         const route = !labelFor && !marked && req.route && typeof req.route.path === 'string' ? req.route.path : undefined;
