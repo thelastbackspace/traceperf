@@ -5,7 +5,7 @@
  * (require, import, <script> tag) via Node's package self-reference,
  * so they exercise package.json "exports" exactly as an installed copy would.
  */
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vm from 'vm';
@@ -28,9 +28,7 @@ function collectTargets(value: any, out: string[] = []): string[] {
   return out;
 }
 
-beforeAll(() => {
-  execSync('npm run build:all', { cwd: root, stdio: 'ignore' });
-}, 180000);
+// dist/ is built by the Jest global setup (test/jest-global-setup.js)
 
 describe('package exports', () => {
   test('every path in the exports map exists after build', () => {

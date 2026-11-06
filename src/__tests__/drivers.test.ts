@@ -9,7 +9,7 @@
 import * as net from 'net';
 import * as http from 'http';
 import * as path from 'path';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { AddressInfo } from 'net';
 import {
   createTracePerf,
@@ -84,7 +84,6 @@ const nodeMajor = Number(process.versions.node.split('.')[0]);
 (MONGO && nodeMajor >= 20 ? describe : describe.skip)('instrumentMongo (real MongoDB)', () => {
   test('collection operations and cursor reads', () => {
     // Plain Node process: the driver cannot build its client metadata inside Jest
-    execSync('npm run build', { cwd: path.resolve(__dirname, '..', '..'), stdio: 'ignore' });
     const out = execFileSync(process.execPath, [path.resolve(__dirname, '..', '..', 'test/drivers/mongo-check.js')], {
       env: { ...process.env, TRACEPERF_MONGO_URL: MONGO },
       encoding: 'utf8',

@@ -6,7 +6,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync, execSync, spawnSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { AddressInfo } from 'net';
 import {
   autoInstrument,
@@ -220,9 +220,7 @@ describe('autoInstrument', () => {
 
 describe('traceperf/auto (real node process)', () => {
   const root = path.resolve(__dirname, '..', '..');
-  beforeAll(() => {
-    execSync('npm run build', { cwd: root, stdio: 'ignore' });
-  }, 120000);
+  // dist/ is built by the Jest global setup
 
   const appSource = `
 const http = require('http');
