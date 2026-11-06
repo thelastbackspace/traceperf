@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-06
+
+(Includes 1.5.1, which was tagged but never published.)
+
 ### Added
 - **`traceperf run -H "Name: value"`** (repeatable): request headers, for APIs behind auth (`-H "Authorization: Bearer $TOKEN"`).
 - **CPU cost per request:** `run` measures how busy the app's event loop was and where the CPU went during the load. When each request costs 5 ms or more of event-loop time it says so, with the ceiling it puts on one process and the hottest functions: "Each request keeps the event loop busy ~10.6 ms, so one process tops out near 94 requests/s… CPU time went to: getProperty (mongoose…) 19%, cloneObject 17%…", with `.lean()` advice when Mongoose document building is the cost. Queueing and tail-only slow calls that it explains are no longer reported separately. `TRACEPERF_LOAD_OUTPUT` and the profiler's `onWindow` option provide the data.
