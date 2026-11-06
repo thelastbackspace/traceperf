@@ -34,6 +34,10 @@ export interface RunArgs {
   /** Request headers, e.g. { authorization: 'Bearer ...' } */
   headers?: Record<string, string>;
   html?: string;
+  /** Write call counts per route here (a baseline for --baseline) */
+  saveBaseline?: string;
+  /** Compare call counts per route with this baseline; exit 1 on more calls or new problems */
+  baseline?: string;
   output?: string;
   json: boolean;
   max: number;
@@ -59,6 +63,10 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --html out.html  write an HTML report
       --output f.jsonl keep the raw request trees
       --json           print stats and findings as JSON
+      --save-baseline f.json   save calls per request for each route (commit it)
+      --baseline f.json        compare with it; exit 1 if a route makes more calls
+                               (e.g. an N+1) or a new problem appears. Counts, not
+                               timings: deterministic, safe for CI
       --no-profile     don't sample the CPU (blocking code is then named
                        only by its tracked call)`;
 
@@ -134,6 +142,8 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
         break;
       }
       case '--json': args.json = true; break;
+      case '--save-baseline': if (!(args.saveBaseline = argv[++i])) return '--save-baseline expects a file'; break;
+      case '--baseline': if (!(args.baseline = argv[++i])) return '--baseline expects a file'; break;
       case '--no-profile': args.profile = false; break;
       case '--probe': {
         const n = Number(argv[++i]);
@@ -342,6 +352,76 @@ export function statusFinding(load: LoadResult): Finding | undefined {
     message: `${failedCount} of ${total} responses failed (most: ${n}× ${what}), so the timings below describe error responses, not the endpoints`,
     fix: hint,
   };
+}
+
+/** Calls per request for each route, and the kinds of problem found: deterministic, unlike timings */
+export interface Baseline {
+  version: 1;
+  routes: Record<string, { requests: number; calls: Record<string, number> }>;
+  /** "kind route" of repeated-call (N+1) and error findings: counts, so deterministic (blocking is timing, so not here) */
+  problems: string[];
+}
+
+interface CountNode { label: string; children: CountNode[] }
+
+/** Median number of each call label per request, per route */
+export function baselineOf(trees: CountNode[], findings: Finding[]): Baseline {
+  const byRoute = new Map<string, Array<Map<string, number>>>();
+  for (const tree of trees) {
+    const counts = new Map<string, number>();
+    const walk = (n: CountNode) => n.children.forEach(c => {
+      counts.set(c.label, (counts.get(c.label) || 0) + 1);
+      walk(c);
+    });
+    walk(tree);
+    const list = byRoute.get(tree.label) ?? [];
+    list.push(counts);
+    byRoute.set(tree.label, list);
+  }
+  const routes: Baseline['routes'] = {};
+  [...byRoute.keys()].sort().forEach(route => {
+    const list = byRoute.get(route)!;
+    const labels = [...new Set(list.flatMap(m => [...m.keys()]))].sort();
+    const calls: Record<string, number> = {};
+    for (const label of labels) {
+      const values = list.map(m => m.get(label) || 0).sort((a, b) => a - b);
+      const median = values[Math.floor((values.length - 1) / 2)];
+      if (median > 0) calls[label] = median;
+    }
+    routes[route] = { requests: list.length, calls };
+  });
+  const problems = [...new Set(findings
+    .filter(f => (f.kind === 'repeated' || f.kind === 'error') && f.root !== 'load')
+    .map(f => `${f.kind === 'repeated' ? 'N+1' : 'errors'} in ${f.root}`))].sort();
+  return { version: 1, routes, problems };
+}
+
+/** Differences that make a PR worse: more calls per request on a route, or a new problem */
+export function compareBaseline(before: Baseline, now: Baseline): { regressions: string[]; improvements: string[]; notes: string[] } {
+  const regressions: string[] = [];
+  const improvements: string[] = [];
+  const notes: string[] = [];
+  for (const route of Object.keys(now.routes).sort()) {
+    const b = before.routes[route];
+    const a = now.routes[route];
+    if (!b) {
+      notes.push(`${route}: new route (not in the baseline)`);
+      continue;
+    }
+    const labels = [...new Set([...Object.keys(b.calls), ...Object.keys(a.calls)])].sort();
+    for (const label of labels) {
+      const x = b.calls[label] || 0;
+      const y = a.calls[label] || 0;
+      if (y > x) regressions.push(`${route}: ${label} ${x} → ${y} per request${x <= 1 && y >= 5 ? ' (an N+1?)' : ''}`);
+      else if (y < x) improvements.push(`${route}: ${label} ${x} → ${y} per request`);
+    }
+  }
+  for (const route of Object.keys(before.routes)) {
+    if (!now.routes[route]) notes.push(`${route}: not requested in this run`);
+  }
+  for (const p of now.problems) if (!before.problems.includes(p)) regressions.push(`new problem: ${p}`);
+  for (const p of before.problems) if (!now.problems.includes(p)) improvements.push(`fixed: ${p}`);
+  return { regressions, improvements, notes };
 }
 
 export interface RunSummary {
@@ -584,11 +664,25 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     const after = summary.findings.filter(f => f.kind === 'error' || f.kind === 'blocking').length;
     summary.findings.splice(after, 0, ...queued);
   }
+  // Baselines use the one-at-a-time probe when there is one (the same requests every run)
+  let baselineReport: { regressions: string[]; improvements: string[]; notes: string[] } | undefined;
+  let baselineError: string | undefined;
+  if ((args.saveBaseline || args.baseline) && summary.trees) {
+    const current = baselineOf(deps.parseTrees(probeText.trim() ? probeText : text), summary.findings);
+    if (args.saveBaseline) fs.writeFileSync(args.saveBaseline, JSON.stringify(current, null, 2) + '\n');
+    if (args.baseline) {
+      try {
+        baselineReport = compareBaseline(JSON.parse(fs.readFileSync(args.baseline, 'utf8')), current);
+      } catch (e) {
+        baselineError = `traceperf: could not read the baseline ${args.baseline}: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+  }
   if (args.html && summary.trees) {
     fs.writeFileSync(args.html, deps.report(text, { html: true, findings: summary.findings, title: `traceperf run: ${args.command.join(' ')}` }));
   }
   if (args.json) {
-    deps.out(JSON.stringify({ load, trees: summary.trees, findings: summary.findings }, null, 2));
+    deps.out(JSON.stringify({ load, trees: summary.trees, findings: summary.findings, ...(baselineReport ? { baseline: baselineReport } : {}) }, null, 2));
   } else if (!summary.trees) {
     deps.out('\ntraceperf: no requests were tracked.');
   } else {
@@ -600,10 +694,21 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     lines.push('', summary.stats, '', 'Why it was slow:', formatFindings(summary.findings));
     if (args.html) lines.push('', `HTML report: ${args.html}`);
     if (args.output) lines.push(`Request trees: ${args.output}`);
+    if (args.saveBaseline) lines.push(`Baseline saved: ${args.saveBaseline}`);
+    if (baselineReport) {
+      const { regressions, improvements, notes } = baselineReport;
+      lines.push('', `Compared with ${args.baseline}:`);
+      regressions.forEach(r => lines.push(`  ✖ ${r}`));
+      improvements.forEach(r => lines.push(`  ✔ ${r}`));
+      notes.forEach(r => lines.push(`  · ${r}`));
+      if (!regressions.length && !improvements.length) lines.push('  ✔ same calls per request on every route');
+    }
     deps.out(lines.join('\n'));
   }
+  if (baselineError) deps.err(baselineError);
   if (!args.output) fs.rmSync(dir, { recursive: true, force: true });
   // Interactive runs end with Ctrl-C; that is success. A crash before any traffic is not.
+  if (baselineError || (baselineReport && baselineReport.regressions.length)) return 1;
   return !summary.trees && exitCode ? 1 : 0;
 }
 

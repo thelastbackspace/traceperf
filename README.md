@@ -106,6 +106,30 @@ Checked on real apps, not only on the planted ones: Prisma's REST example, the R
 - `--no-profile`: don't sample the CPU.
 - Any start command works: `npx traceperf run -- npm start`.
 
+### In CI: fail a PR that adds queries
+
+Timings are too noisy to gate a PR on (the same run can be twice as fast on an idle machine), but how many queries a route makes per request is exact. Save a baseline once, commit it, and compare on every PR:
+
+<!-- docs:skip -->
+```bash
+npx traceperf run server.js --path /orders --path /users/1 --save-baseline perf-baseline.json
+npx traceperf run server.js --path /orders --path /users/1 --baseline perf-baseline.json   # exit 1 on regressions
+```
+
+```
+Compared with perf-baseline.json:
+  ✖ GET /orders: pg SELECT items 1 → 12 per request (an N+1?)
+  ✖ new problem: N+1 in GET /orders
+```
+
+It fails when a route makes more calls of any kind per request (database queries, HTTP calls, Redis commands) or an N+1 or error appears; fewer calls are reported as improvements. Counts come from the one-at-a-time requests, so they don't depend on the machine. In GitHub Actions, with a service container for the database:
+
+<!-- docs:skip -->
+```yaml
+- run: npm ci && npm run db:seed
+- run: npx traceperf run dist/server.js --path /orders --path /users/1 --baseline perf-baseline.json
+```
+
 `examples/slow-apps/` has small apps with one planted problem each (blocking in your code, blocking in built-ins, sequential awaits, N+1, a slow dependency, errors); CI checks that `run` names each one.
 
 The same naming works without `run`: `TRACEPERF_PROFILE_BLOCKING=1 node --require traceperf/auto server.js` adds the function names to the exit summary (sampling costs a few percent CPU, so use it while investigating). In code: `profileSlowCalls({ select: root => blockingRanges(root), mergeInlined: true, onProfile })`, then `explain(roots, { hotspots })`.
