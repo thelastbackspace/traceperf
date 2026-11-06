@@ -80,6 +80,25 @@ describe('sendLoad', () => {
     }
   });
 
+  it('sends the headers given with -H / --header', async () => {
+    const seen: Array<string | undefined> = [];
+    const server = http.createServer((req, res) => {
+      seen.push(`${req.headers.authorization}|${req.headers['x-tenant']}`);
+      res.end('ok');
+    });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const args = parseRunArgs(['a.js', '--path', '/', '-n', '2', '-c', '1', '-H', 'Authorization: Bearer a:b', '--header', 'X-Tenant:  7']) as RunArgs;
+      expect(args.headers).toEqual({ authorization: 'Bearer a:b', 'x-tenant': '7' });
+      await sendLoad(http, args, port);
+      expect(seen).toEqual(['Bearer a:b|7', 'Bearer a:b|7']);
+    } finally {
+      server.close();
+    }
+    expect(parseRunArgs(['a.js', '-H', 'no-colon'])).toBe('--header expects "Name: value"');
+  });
+
   it('counts connection failures as errors', async () => {
     const args = parseRunArgs(['a.js', '--path', '/', '-n', '3', '-c', '1']) as RunArgs;
     const result = await sendLoad(http, args, 1);
@@ -237,6 +256,33 @@ describe('naming blocking code from CPU profiles', () => {
     expect(blocking.message).not.toContain('tiny'); // under 5%
     expect(blocking.call).toBe('GET /report');
     expect(findings.find(f => f.kind === 'blocked')!.message).toContain('blocked the event loop, in buildReport (server.js:10)');
+  });
+});
+
+describe('busyFinding', () => {
+  const { busyFinding } = jest.requireActual('../run');
+  const load = { requests: 400, errors: 0, statuses: {}, durationMs: 4000, latency: {} };
+  const second = (i: number, activeMs: number, extra = {}) => ({ start: 1000 * i, end: 1000 * (i + 1), activeMs, idleMs: 1000 - activeMs, cpuMs: activeMs, ...extra });
+  const spot = (functionName: string, url: string, selfMs: number) => ({ functionName, url, line: 10, column: 0, selfMs });
+
+  it('says the app was saturated and where the CPU went', () => {
+    const samples = [
+      second(0, 100), // before the load: ignored
+      ...[1, 2, 3, 4].map(i => second(i, 960)),
+      ...[1, 2, 3, 4].map(i => ({ start: 1000 * i, end: 1000 * (i + 1), hotspots: [spot('cloneObject', '/app/node_modules/mongoose/lib/helpers/clone.js', 300), spot('render', '/app/src/view.js', 100)] })),
+    ];
+    const f = busyFinding(samples, load, { start: 1000, end: 5000 }, '/app');
+    expect(f.kind).toBe('busy');
+    expect(f.message).toMatch(/^Each request keeps the event loop busy ~9\.6 ms, so one process tops out near 104 requests\/s: at 100\/s here its event loop was busy 96%/);
+    expect(f.message).toContain('cloneObject (node_modules/mongoose/lib/helpers/clone.js:10) 75%, render (src/view.js:10) 25%');
+    expect(f.fix).toMatch(/\.lean\(\)/);
+  });
+
+  it('says nothing when the app had spare capacity', () => {
+    expect(busyFinding([1, 2, 3].map(i => second(i, 400)), load, { start: 1000, end: 4000 })).toBeUndefined();
+    expect(busyFinding([], load, { start: 0, end: 1 })).toBeUndefined();
+    // Saturated, but each request is cheap (2 ms of CPU): that is just a load test at work
+    expect(busyFinding([1, 2, 3].map(i => second(i, 960)), { ...load, requests: 1920 }, { start: 1000, end: 4000 })).toBeUndefined();
   });
 });
 

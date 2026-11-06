@@ -19,6 +19,8 @@
  *   TRACEPERF_PROFILE_BLOCKING=1   sample the CPU (V8 profiler) to name the
  *                                  functions that blocked the event loop (a few % CPU)
  *   TRACEPERF_PROFILE_OUTPUT=f     with it, append those profiles as JSON lines
+ *   TRACEPERF_LOAD_OUTPUT=f        append event-loop / CPU use each second (and,
+ *                                  when profiling, where the CPU went) as JSON lines
  *   TRACEPERF_ENABLED=0            load nothing
  */
 import './node-builtins'; // must stay first: see node-builtins.ts
@@ -66,6 +68,33 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
   // Name the code behind blocking: profile the synchronous part of blocking calls
   const blockingEntries: BlockingProfileEntry[] = [];
   let profiler: SlowCallProfiler | undefined;
+  // How busy the process was (traceperf run tells "slow code" from "too much load")
+  const loadOutput = env.TRACEPERF_LOAD_OUTPUT;
+  const appendLoad = (entry: object) => {
+    if (!loadOutput || !fs) return;
+    try {
+      fs.appendFileSync(loadOutput, JSON.stringify(entry) + '\n');
+    } catch {
+      // reporting must never break the app
+    }
+  };
+  const perf = (globalThis as any).performance;
+  if (loadOutput && perf && typeof perf.eventLoopUtilization === 'function' && typeof process.cpuUsage === 'function') {
+    let lastElu = perf.eventLoopUtilization();
+    let lastCpu = process.cpuUsage();
+    let lastAt = Date.now();
+    const timer = setInterval(() => {
+      const elu = perf.eventLoopUtilization(lastElu);
+      const cpu = process.cpuUsage(lastCpu);
+      const now = Date.now();
+      appendLoad({ start: lastAt, end: now, activeMs: elu.active, idleMs: elu.idle, cpuMs: (cpu.user + cpu.system) / 1000 });
+      lastElu = perf.eventLoopUtilization();
+      lastCpu = process.cpuUsage();
+      lastAt = now;
+    }, 1000);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+  const epochOffset = perf && typeof perf.now === 'function' ? Date.now() - perf.now() : 0;
   if (flag(env.TRACEPERF_PROFILE_BLOCKING, false)) {
     const profileOutput = env.TRACEPERF_PROFILE_OUTPUT;
     profiler = profileSlowCalls({
@@ -73,6 +102,14 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
       mergeInlined: true,
       select: root => blockingRanges(root),
       exclude: /[\\/]traceperf[\\/]dist[\\/]/,
+      ...(loadOutput ? {
+        onWindow: (window, start, end) => {
+          const hotspots = window.gcMs >= 1
+            ? [...window.hotspots, { functionName: '(garbage collection)', url: '', line: 0, column: 0, selfMs: window.gcMs }]
+            : window.hotspots;
+          appendLoad({ start: start + epochOffset, end: end + epochOffset, hotspots });
+        },
+      } : {}),
       onProfile: (call, profile) => {
         // Garbage collection during the blocking part counts as a culprit too
         const hotspots = profile.gcMs >= 1

@@ -24,6 +24,8 @@ export interface RunArgs {
   port?: number;
   host: string;
   method: string;
+  /** Request headers, e.g. { authorization: 'Bearer ...' } */
+  headers?: Record<string, string>;
   html?: string;
   output?: string;
   json: boolean;
@@ -43,6 +45,7 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       -n, --requests N      stop after N requests instead
       --port N         app port (default: detected when the app listens)
       --method GET     request method
+      -H, --header "Name: value"   request header, repeatable (e.g. -H "Authorization: Bearer $TOKEN")
       --warmup 3       untimed requests per path first (cold start), 0 for none
       --html out.html  write an HTML report
       --output f.jsonl keep the raw request trees
@@ -101,6 +104,14 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
         break;
       case '--host': args.host = argv[++i] || args.host; break;
       case '--method': args.method = (argv[++i] || 'GET').toUpperCase(); break;
+      case '-H':
+      case '--header': {
+        const h = argv[++i] || '';
+        const colon = h.indexOf(':');
+        if (colon <= 0) return '--header expects "Name: value"';
+        args.headers = { ...args.headers, [h.slice(0, colon).trim().toLowerCase()]: h.slice(colon + 1).trim() };
+        break;
+      }
       case '--html': if (!(args.html = argv[++i])) return '--html expects a file'; break;
       case '--output': if (!(args.output = argv[++i])) return '--output expects a file'; break;
       case '--max':
@@ -145,7 +156,7 @@ export function sendLoad(http: any, args: RunArgs, port: number): Promise<LoadRe
   const more = () => (args.requests !== undefined ? issued < args.requests : Date.now() < deadline);
   const one = (path: string) => new Promise<void>(resolve => {
     const sent = Date.now();
-    const req = http.request({ host: args.host, port, path, method: args.method, agent }, (res: any) => {
+    const req = http.request({ host: args.host, port, path, method: args.method, agent, ...(args.headers ? { headers: args.headers } : {}) }, (res: any) => {
       result.statuses[res.statusCode] = (result.statuses[res.statusCode] || 0) + 1;
       res.resume();
       res.on('end', () => {
@@ -212,6 +223,64 @@ export function queueFindings(load: LoadResult, trees: Array<{ label: string; du
   return findings;
 }
 
+/** One line of TRACEPERF_LOAD_OUTPUT: event-loop/CPU use, or where the CPU went, for a time range (epoch ms) */
+export interface LoadSample {
+  start: number;
+  end: number;
+  activeMs?: number;
+  idleMs?: number;
+  cpuMs?: number;
+  hotspots?: Array<{ functionName: string; url: string; line: number; column: number; selfMs: number }>;
+}
+
+const insideWindow = (window: { start: number; end: number }) => (s: LoadSample): boolean => {
+  // Samples mostly inside the load (the first and last second are partial)
+  const overlap = Math.min(s.end, window.end) - Math.max(s.start, window.start);
+  return overlap > 0.5 * (s.end - s.start);
+};
+
+/** How busy the app's event loop was during the load, and its main-thread time per request (ms) */
+export function loadCost(samples: LoadSample[], load: LoadResult, window: { start: number; end: number }): { busy: number; perRequest: number; rate: number } | undefined {
+  const usage = samples.filter(s => typeof s.activeMs === 'number' && insideWindow(window)(s));
+  const active = usage.reduce((sum, s) => sum + (s.activeMs || 0), 0);
+  const idle = usage.reduce((sum, s) => sum + (s.idleMs || 0), 0);
+  if (usage.length === 0 || active + idle <= 0) return undefined;
+  // Event-loop (main thread) time, not process CPU: GC and libuv threads add
+  // CPU without lowering the single-thread ceiling
+  const activeRate = active / usage.reduce((sum, s) => sum + (s.end - s.start), 0);
+  const rate = load.requests / Math.max(load.durationMs / 1000, 1e-3);
+  return { busy: active / (active + idle), perRequest: rate > 0 ? (activeRate * 1000) / rate : 0, rate };
+}
+
+/**
+ * The app was saturated *and* each request is expensive (5 ms of CPU or
+ * more, a ceiling near 200/s per process): a load test saturates any one
+ * process, so cheap requests are not worth a finding. Names where the CPU went.
+ */
+export function busyFinding(samples: LoadSample[], load: LoadResult, window: { start: number; end: number }, cwd?: string): Finding | undefined {
+  const cost = loadCost(samples, load, window);
+  if (!cost || cost.busy < 0.8 || cost.perRequest < 5) return undefined;
+  const { busy, perRequest, rate } = cost;
+  const inside = insideWindow(window);
+  const entries = samples.filter(s => s.hotspots && inside(s)).map(s => ({ label: 'all', hotspots: s.hotspots! }));
+  const spots = entries.length ? blockingHotspots(entries, { cwd, top: 8 }).all || [] : [];
+  const total = spots.reduce((sum, h) => sum + h.ms, 0);
+  const shown = spots.filter(h => h.ms >= 0.04 * total).slice(0, 4)
+    .map(h => `${h.functionName}${h.location ? ` (${h.location})` : ''} ${Math.round((h.ms / Math.max(total, 1e-9)) * 100)}%`);
+  const where = shown.length ? `; CPU time went to: ${shown.join(', ')}` : '';
+  const mongooseDocs = spots.slice(0, 5).some(h => /mongoose[\\/]lib[\\/](document|helpers|schema)/.test(h.location));
+  const fix = mongooseDocs
+    ? 'Mongoose is building full documents: add .lean() to read-only queries (plain objects, often several times less CPU) and select only the fields you send; beyond that, run more processes (cluster or more instances)'
+    : 'cut the CPU each request needs (start with the functions above), or run more processes (cluster or more instances) so requests stop waiting for each other';
+  return {
+    kind: 'busy',
+    root: 'process',
+    ms: (busy * load.durationMs),
+    message: `Each request keeps the event loop busy ~${perRequest.toFixed(1)} ms, so one process tops out near ${Math.round(1000 / perRequest)} requests/s: at ${rate.toFixed(0)}/s here its event loop was busy ${Math.round(busy * 100)}% of the time and requests queued for the CPU (most of their latency is waiting, not slow code)${where}`,
+    fix,
+  };
+}
+
 export interface RunSummary {
   stats: string;
   findings: Finding[];
@@ -258,6 +327,8 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   const output = args.output ? path.resolve(args.output) : path.join(dir, 'calls.jsonl');
   const readyFile = path.join(dir, 'port');
   const profileFile = path.join(dir, 'profiles.jsonl');
+  const loadFile = path.join(dir, 'load.jsonl');
+  let loadWindow: { start: number; end: number } | undefined;
   if (args.output) fs.writeFileSync(output, '');
   const env: Record<string, string> = {
     ...process.env,
@@ -266,6 +337,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     TRACEPERF_SUMMARY: '0',
     TRACEPERF_READY_FILE: readyFile,
     ...(args.profile ? { TRACEPERF_PROFILE_BLOCKING: '1', TRACEPERF_PROFILE_OUTPUT: profileFile } : {}),
+    TRACEPERF_LOAD_OUTPUT: loadFile,
   } as Record<string, string>;
   const [cmd, ...cmdArgs] = args.command;
   const quoted = JSON.stringify(deps.registerPath);
@@ -353,7 +425,11 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
           skipBytes = 0;
         }
       }
+      const loadStart = Date.now();
       load = await sendLoad(deps.http, args, port);
+      loadWindow = { start: loadStart, end: Date.now() };
+      // One more load sample covers the last second
+      await new Promise(r => setTimeout(r, 1100));
       await stopAndWait();
     } else {
       deps.err('traceperf: app running; use it, then press Ctrl-C for the report');
@@ -383,7 +459,34 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   const summary = summarise(text, deps, args.max, profiles, process.cwd());
   if (load) {
     const blocked = summary.findings.some(f => f.kind === 'blocking');
-    const queued = queueFindings(load, deps.parseTrees(text), args.method, blocked);
+    let queued = queueFindings(load, deps.parseTrees(text), args.method, blocked);
+    let samples: LoadSample[] = [];
+    try {
+      samples = fs.readFileSync(loadFile, 'utf8').split('\n').filter((l: string) => l.trim()).map((l: string) => JSON.parse(l));
+    } catch {
+      samples = [];
+    }
+    const busy = loadWindow ? busyFinding(samples, load, loadWindow, process.cwd()) : undefined;
+    const cost = loadWindow ? loadCost(samples, load, loadWindow) : undefined;
+    // Queueing with nothing blocking and cheap requests: the load test filled the process, as it does
+    if (!blocked && cost && cost.perRequest < 5) queued = [];
+    if (busy) {
+      // Saturated: "time outside tracked calls" is a symptom of it, not a cause
+      // ... and so is a call that is slow only in the tail (it waited for the CPU)
+      const tailOnly = (f: Finding) => {
+        const m = /\(in (\d+) of (\d+) /.exec(f.message);
+        return !!m && Number(m[1]) < 0.2 * Number(m[2]);
+      };
+      const rest = summary.findings.filter(f => !(f.kind === 'dominant' && (f.message.includes('outside any tracked call') || tailOnly(f))));
+      if (blocked) {
+        // Blocking code is why it is saturated: blocking, then who waited, then the overall picture
+        const after = rest.filter(f => f.kind === 'error' || f.kind === 'blocking').length;
+        summary.findings = [...rest.slice(0, after), ...queued, busy, ...rest.slice(after)];
+      } else {
+        summary.findings = [busy, ...rest];
+      }
+      queued = [];
+    }
     // After blocking findings, which explain them
     const after = summary.findings.filter(f => f.kind === 'error' || f.kind === 'blocking').length;
     summary.findings.splice(after, 0, ...queued);

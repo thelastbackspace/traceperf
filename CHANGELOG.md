@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`traceperf run -H "Name: value"`** (repeatable): request headers, for APIs behind auth (`-H "Authorization: Bearer $TOKEN"`).
+- **CPU cost per request:** `run` measures how busy the app's event loop was and where the CPU went during the load. When each request costs 5 ms or more of event-loop time it says so, with the ceiling it puts on one process and the hottest functions: "Each request keeps the event loop busy ~10.6 ms, so one process tops out near 94 requests/s… CPU time went to: getProperty (mongoose…) 19%, cloneObject 17%…", with `.lean()` advice when Mongoose document building is the cost. Queueing and tail-only slow calls that it explains are no longer reported separately. `TRACEPERF_LOAD_OUTPUT` and the profiler's `onWindow` option provide the data.
+
+### Changed (from running it on a Mongoose 5 + Express app)
+- A call that comes first in several routes (auth middleware loading the user) is not counted in a sequential run: the handler depends on it.
+- Queueing on a fast app (under 5 ms of event-loop time per request) is not reported: a load test fills any one process.
+
+### Fixed
+- MongoDB driver 3.x (Mongoose 5): callback-style calls were timed as ~0.1 ms (the span ended before the callback) and `find` was not tracked (`Cursor.toArray`).
+- Express route labels no longer end in `/` for `router.route('/')` (`GET /v1/users`, not `GET /v1/users/`).
+- CI: the browser job runs in Playwright's container image; installing browser system packages from the runner's apt mirror stalled three times (1.5.1 was tagged but not published because of it).
+
 ## [1.5.1] - 2026-11-06
 
 ### Added

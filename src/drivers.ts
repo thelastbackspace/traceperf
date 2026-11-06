@@ -164,18 +164,24 @@ export function instrumentMongo(tp: OptimizedPerformanceMonitor, mongodb: any, o
   const collection = mongodb && mongodb.Collection && mongodb.Collection.prototype;
   for (const method of MONGO_COLLECTION_METHODS) {
     patchMethod(collection, method, original => function (this: any, ...args: unknown[]) {
-      // Modern driver methods are promise-only; never treat a filter as a callback
-      return trackCall(tp, `mongo ${method} ${this && this.collectionName}`, options, this, original, args, -1);
+      // Driver 4+ is promise-only; 3.x (Mongoose 5) takes a trailing callback. Filters are never functions.
+      const cb = typeof args[args.length - 1] === 'function' ? args.length - 1 : -1;
+      return trackCall(tp, `mongo ${method} ${this && this.collectionName}`, options, this, original, args, cb);
     }, restores);
   }
   const cursorName = (cursor: any): string => {
     const ns = cursor && cursor.namespace;
-    return (ns && (ns.collection || ns.coll)) || '';
+    if (ns && (ns.collection || ns.coll)) return ns.collection || ns.coll;
+    // Driver 3.x: "db.collection"
+    const s = cursor && typeof cursor.ns === 'string' ? cursor.ns : '';
+    return s.includes('.') ? s.slice(s.indexOf('.') + 1) : s;
   };
-  for (const [className, op] of [['FindCursor', 'find'], ['AggregationCursor', 'aggregate']] as const) {
+  // FindCursor: driver 4+; Cursor: driver 3.x (Mongoose 5)
+  for (const [className, op] of [['FindCursor', 'find'], ['Cursor', 'find'], ['AggregationCursor', 'aggregate']] as const) {
     const proto = mongodb && mongodb[className] && mongodb[className].prototype;
     patchMethod(proto, 'toArray', original => function (this: any, ...args: unknown[]) {
-      return trackCall(tp, `mongo ${op} ${cursorName(this)}`, options, this, original, args, -1);
+      const cb = typeof args[args.length - 1] === 'function' ? args.length - 1 : -1;
+      return trackCall(tp, `mongo ${op} ${cursorName(this)}`, options, this, original, args, cb);
     }, restores);
   }
   return () => restores.forEach(r => r());
