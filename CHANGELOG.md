@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`traceperf run`:** starts an app with `traceperf/auto`, sends concurrent traffic (`--path`, `-c`, `-d`/`-n`, `--method`; warm-up requests first), then prints statistics and explanations. Without `--path`, use the app yourself and press Ctrl-C. Works with a script (`traceperf run server.js`) or any command (`traceperf run -- npm start`). `--html`, `--output`, `--json`.
+- **Known-slow example apps** (`examples/slow-apps/`): one planted cause each; a test checks that `explain` names it.
+- JSON lines include `startMs` (sub-millisecond start time); `traceperf explain` uses it when present.
+
+### Changed
+- `explain`: an N+1 pattern is reported once, not also as sequential awaits; sequential awaits in one parent are one finding; errors are listed first; "X in X" no longer appears when the blocking call is the top-level call.
+
 ## [1.3.0] - 2026-11-06
 
 ### Added

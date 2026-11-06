@@ -13,6 +13,7 @@ import { LabelStats, StatsCollector, formatStatsTable } from './core/stats';
 import { explain, ExplainNode, ExplainOptions, formatFindings } from './core/explain';
 import { renderHtmlReport } from './report-html';
 import { createWatcher, WatchOptions } from './watch';
+import { parseRunArgs, runApp, RUN_USAGE } from './run';
 
 export interface ReportOptions {
   top?: number;
@@ -165,7 +166,7 @@ export function parseTrees(text: string): ExplainNode[] {
   }
   const convert = (n: any): ExplainNode => ({
     label: n.label,
-    startTime: typeof n.start === 'string' ? Date.parse(n.start) : 0,
+    startTime: typeof n.startMs === 'number' ? n.startMs : typeof n.start === 'string' ? Date.parse(n.start) : 0,
     duration: n.durationMs,
     selfDuration: typeof n.selfMs === 'number' ? n.selfMs : n.durationMs,
     syncDuration: typeof n.syncMs === 'number' ? n.syncMs : undefined,
@@ -340,7 +341,9 @@ const USAGE = `Usage:
 
   explain lists likely causes: blocking code, sequential awaits, N+1 calls
   compare --fail exits with code 1 when any label regressed (for CI)
-  watch follows a JSON-lines log as it grows; --once prints one frame`;
+  watch follows a JSON-lines log as it grows; --once prints one frame
+
+${RUN_USAGE}`;
 
 export function main(argv: string[], io: {
   readFile: (path: string) => string;
@@ -362,6 +365,11 @@ export function main(argv: string[], io: {
   }
   if (command === 'watch') {
     return runWatchOnce(rest, io);
+  }
+  if (command === 'run') {
+    const args = parseRunArgs(rest);
+    io.err(typeof args === 'string' ? `traceperf: ${args}\n\n${RUN_USAGE}` : 'traceperf: run starts an app; use the traceperf command');
+    return 1;
   }
   if (command !== 'report') {
     io.err(`traceperf: unknown command "${command}"\n\n${USAGE}`);
@@ -537,8 +545,22 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const fs = require('fs');
   const argv = process.argv.slice(2);
   const watchArgs = argv[0] === 'watch' ? parseWatchArgs(argv.slice(1)) : undefined;
+  const runArgs = argv[0] === 'run' ? parseRunArgs(argv.slice(1)) : undefined;
   if (watchArgs && typeof watchArgs !== 'string' && !watchArgs.once) {
     watchLive(watchArgs, fs);
+  } else if (runArgs && typeof runArgs !== 'string') {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    runApp(runArgs, {
+      childProcess: require('child_process'), fs, http: require('http'), os: require('os'), path: require('path'),
+      registerPath: require('path').join(__dirname, 'register.js'),
+      report, parseTrees,
+      out: text => console.log(text),
+      err: text => console.error(text),
+    }).then(code => { process.exitCode = code; }, error => {
+      console.error(`traceperf: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    });
+    /* eslint-enable @typescript-eslint/no-require-imports */
   } else process.exitCode = main(argv, {
     readFile: path => fs.readFileSync(path, 'utf8'),
     readStdin: () => fs.readFileSync(0, 'utf8'),

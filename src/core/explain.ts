@@ -92,7 +92,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
   const minMs = options.minMs ?? 5;
   const dominantShare = options.dominantShare ?? 0.6;
   const repeatCount = options.repeatCount ?? 5;
-  const findings: Finding[] = [];
+  const findings: Array<Finding & { group?: string }> = [];
 
   const blockers: Blocker[] = [];
   roots.forEach((root, i) => collectBlockers(root, i, blockingMs, blockers));
@@ -116,12 +116,14 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     byLabel.forEach(({ ms, roots: from }, label) => {
       blockedTotal += ms;
       if (ms < minMs) return;
-      const where = [...from].slice(0, 3).join(', ') + (from.size > 3 ? ` and ${from.size - 3} more` : '');
+      const others = [...from].filter(r => r !== label);
+      const where = others.length === 0 ? ''
+        : ` in ${others.slice(0, 3).join(', ')}${others.length > 3 ? ` and ${others.length - 3} more` : ''}`;
       findings.push({
         kind: 'blocked',
         root: rootLabel,
         ms,
-        message: `${rootLabel} waited ~${fmt(ms)} (${pct(ms, root.duration)} of its ${fmt(root.duration)}) while ${label} in ${where} blocked the event loop`,
+        message: `${rootLabel} waited ~${fmt(ms)} (${pct(ms, root.duration)} of its ${fmt(root.duration)}) while ${label}${where} blocked the event loop`,
       });
     });
 
@@ -145,8 +147,13 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
       // 3. Awaited one after another although they could overlap
       const asyncKids = kids.filter(k => k.async && k.duration >= 1).sort((a, b) => a.startTime - b.startTime);
       let run: ExplainNode[] = [];
+      const labelCount = new Map<string, number>();
+      for (const k of kids) labelCount.set(k.label, (labelCount.get(k.label) || 0) + 1);
       const flush = () => {
-        if (run.length >= 2) {
+        // A run of one label repeated many times is the N+1 finding below
+        const repeated = run.filter(k => (labelCount.get(k.label) || 0) >= repeatCount).length;
+        const nPlusOne = repeated > 0 && repeated >= run.length - 1;
+        if (run.length >= 2 && !nPlusOne) {
           const total = run.reduce((s, k) => s + k.duration, 0);
           const saving = total - Math.max(...run.map(k => k.duration));
           if (saving >= minMs) {
@@ -156,6 +163,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
               kind: 'sequential',
               root: rootLabel,
               ms: saving,
+              group: node.label,
               message: `${node.label} awaited ${run.length} calls one after another (${shown}: ${fmt(total)}); if they are independent, Promise.all could save up to ~${fmt(saving)}`,
             });
           }
@@ -238,10 +246,11 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
 
   // Same finding for many identical roots (e.g. 1000 requests): keep the largest, count the rest
   // Blocking by the same function is grouped across top-level calls too
-  const grouped = new Map<string, Finding & { times: number; roots: Set<string> }>();
+  const grouped = new Map<string, Finding & { group?: string; times: number; roots: Set<string> }>();
   for (const f of findings) {
     const scope = f.kind === 'blocking' ? '' : f.root;
-    const key = `${f.kind}|${scope}|${f.message.replace(/[0-9.]+ ?(ms|s|%)/g, '')}`;
+    // Sequential awaits in one parent are one finding, however the runs split
+    const key = f.group !== undefined ? `${f.kind}|${scope}|${f.group}` : `${f.kind}|${scope}|${f.message.replace(/[0-9.]+ ?(ms|s|%)/g, '')}`;
     const g = grouped.get(key);
     if (!g) grouped.set(key, { ...f, times: 1, roots: new Set([f.root]) });
     else {
@@ -252,9 +261,11 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
   }
   const order: Record<FindingKind, number> = { error: 0, blocked: 1, blocking: 2, repeated: 3, sequential: 4, dominant: 5 };
   return [...grouped.values()]
-    .sort((a, b) => b.ms * b.times - a.ms * a.times || order[a.kind] - order[b.kind])
+    // Failures first: they matter more than timing; then by total time involved
+    .sort((a, b) => Number(b.kind === 'error') - Number(a.kind === 'error') || b.ms * b.times - a.ms * a.times || order[a.kind] - order[b.kind])
     .slice(0, options.max ?? 20)
-    .map(({ times, roots: seenIn, ...f }) => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    .map(({ times, roots: seenIn, group, ...f }) => {
       const where = [...seenIn];
       const label = where.length > 3 ? `${where.slice(0, 3).join(', ')} and ${where.length - 3} more` : where.join(', ');
       if (f.kind === 'blocking') {

@@ -75,6 +75,26 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
     process.stderr.write(`traceperf: tracking ${instrumented.join(', ') || 'nothing'}${output ? ` -> ${output}` : ''}\n`);
   }
 
+  // `traceperf run` learns the app's port from this file
+  const readyFile = env.TRACEPERF_READY_FILE;
+  const http = readyFile && fs ? loadNodeBuiltin('http') : undefined;
+  if (http && readyFile) {
+    const listen = http.Server.prototype.listen;
+    http.Server.prototype.listen = function (this: any, ...a: any[]) {
+      this.once('listening', () => {
+        const address = this.address();
+        if (address && typeof address === 'object' && !fs.existsSync(readyFile)) {
+          try {
+            fs.writeFileSync(readyFile, String(address.port));
+          } catch {
+            // the run command will time out and say so
+          }
+        }
+      });
+      return listen.apply(this, a);
+    };
+  }
+
   let printed = false;
   const printSummary = () => {
     if (printed || !summary) return;

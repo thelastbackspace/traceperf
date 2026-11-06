@@ -61,6 +61,36 @@ import tp, { createTracePerf, TrackingMode } from 'traceperf';
 tp.track(() => JSON.parse('{"a":1}'), { label: 'parse' }); // the default instance
 ```
 
+## Why is my API slow? `traceperf run`
+
+One command, no code changes. It starts your app with tracking on, sends it concurrent traffic, and tells you why requests were slow:
+
+```bash
+npx traceperf run server.js --path /report --path /users
+```
+
+```
+traceperf: sending 5 s of traffic to /report, /users on port 3000, 10 at a time
+
+load: 230 requests in 5.0 s (46/s), 230× 200
+...per-route and per-query p50/p95/p99...
+
+Why it was slow:
+⏳ GET /users waited ~165 ms (95% of its 174 ms) while GET /report blocked the event loop
+🔥 GET /report ran 46 ms of synchronous code, blocking everything else in the process for that long
+● SELECT * FROM users took 100% of GET /users (174 ms of 174 ms), but ~165 ms of that was waiting for blocking code elsewhere
+```
+
+The database was fast; `GET /report` was blocking it. That only shows up when requests overlap, which is why `run` sends concurrent traffic.
+
+- `--path /x` (repeatable): what to request. Without `--path`, use the app yourself and press Ctrl-C for the report.
+- `-c 10` concurrency, `-d 5s` duration or `-n 500` requests, `--method POST`, `--port 3000` (detected by default).
+- `--html report.html`, `--output calls.jsonl` (keep the trees), `--json`.
+- `--warmup 3`: untimed requests per path first, so cold-start work doesn't look like a problem.
+- Any start command works: `npx traceperf run -- npm start`.
+
+`examples/slow-apps/` has small apps with one planted problem each (blocking, sequential awaits, N+1, a slow dependency, errors); CI checks that `run` names each one.
+
 ## No code changes: `traceperf/auto`
 
 Start your app with traceperf preloaded. Every incoming HTTP request becomes a tree, with the outgoing `http`/`fetch` calls and the `pg`, `mysql2`, MongoDB/Mongoose and `ioredis` queries it made nested under it:
@@ -697,6 +727,7 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 
 ## Examples
 
+- `examples/slow-apps/`: five small apps, one planted performance problem each; try `npx traceperf run examples/slow-apps/n-plus-one/server.js --path /orders`.
 - `examples/playground/`: an Express app with a hidden N+1 query problem.
 - `examples/optimized-tracking-example.js`: the basics.
 - `examples/stats-and-export.js`: statistics, spans, a Perfetto trace and JSON lines in a production-style setup.

@@ -259,6 +259,7 @@ export function recordToJSON(record: ExecutionRecord): Record<string, unknown> {
   return {
     label: record.label,
     start: new Date(record.startEpochMs).toISOString(),
+    startMs: record.startEpochMs,
     durationMs: record.duration,
     selfMs: record.selfDuration,
     syncMs: record.syncDuration,

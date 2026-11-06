@@ -4,6 +4,7 @@ Ideas, roughly in priority order. Comments and PRs are welcome on any of these. 
 
 ## Shipped recently
 
+- Next: `traceperf run` (one command: start, load, explain) and known-slow example apps that check `explain`.
 - 1.3: zero-code `traceperf/auto`, `traceperf explain`, CPU hotspots for slow calls (`profileSlowCalls`), real-MySQL CI.
 - 1.2: database/cloud client instrumentation, Koa/NestJS, the DevTools timeline, HTML reports, `traceperf compare`, `onSlow`, the Prometheus exporter, allocation profiling, edge runtimes and `traceperf watch`.
 
