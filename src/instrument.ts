@@ -210,15 +210,26 @@ export function prismaExtension(tp: OptimizedPerformanceMonitor, options: TrackO
  * /users/:id/orders/:id. Numbers, UUIDs, long hex and long mixed tokens count as ids.
  */
 export function normalizePath(url: string): string {
-  const path = String(url || '/').split('?')[0].split('#')[0] || '/';
-  return path.split('/').map(seg => {
-    if (!seg) return seg;
-    if (/^\d+$/.test(seg)) return ':id';
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return ':id';
-    if (/^[0-9a-f]{16,}$/i.test(seg)) return ':id';
-    if (seg.length >= 20 && /\d/.test(seg) && /^[A-Za-z0-9_-]+$/.test(seg)) return ':id';
-    return seg;
-  }).join('/');
+  let path = String(url || '/');
+  const q = path.search(/[?#]/);
+  if (q !== -1) path = path.slice(0, q);
+  if (!path) return '/';
+  // Fast path: ids always contain a digit
+  if (!/\d/.test(path)) return path;
+  const segments = path.split('/');
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (seg && /\d/.test(seg) && isIdSegment(seg)) segments[i] = ':id';
+  }
+  return segments.join('/');
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isIdSegment(seg: string): boolean {
+  if (/^\d+$/.test(seg)) return true;
+  if (seg.length === 36 && UUID.test(seg)) return true;
+  if (seg.length >= 16 && /^[0-9a-f]+$/i.test(seg)) return true;
+  return seg.length >= 20 && /^[A-Za-z0-9_-]+$/.test(seg);
 }
 
 export interface HttpServerInstrumentOptions extends InstrumentOptions {
@@ -250,6 +261,8 @@ export function instrumentHttpServer(tp: OptimizedPerformanceMonitor, options: H
       }
       const label = labelFor ? labelFor(req) : `${req.method || 'GET'} ${normalizePath(req.url)}`;
       const span = tp.start(label, trackOptions);
+      // Disabled or sampled out: nothing to finish
+      if (!span.id) return original.call(this, event, req, res, ...rest);
       let ended = false;
       const end = (error?: unknown) => {
         if (ended) return;
