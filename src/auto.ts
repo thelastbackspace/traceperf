@@ -11,7 +11,7 @@
  */
 import type { OptimizedPerformanceMonitor } from './core/optimized-performance-monitor';
 import { loadNodeBuiltin } from './core/env';
-import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, Uninstall, wrapFastifyFactory } from './instrument';
+import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, labelKoaRoutes, Uninstall, wrapFastifyFactory } from './instrument';
 import { instrumentBetterSqlite3, instrumentMongo, instrumentMysql, instrumentMysql2, instrumentPg, instrumentPrisma, instrumentRedis } from './drivers';
 
 export type AutoTarget = 'server' | 'http' | 'fetch' | 'pg' | 'mysql2' | 'mongodb' | 'ioredis' | 'prisma' | 'better-sqlite3' | 'mysql';
@@ -92,6 +92,14 @@ export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoIns
   if (deps) {
     const appRequire = moduleApi.createRequire(path.join(deps.dir, 'package.json'));
     const load = (name: string) => appRequire(name);
+    // Koa: label requests by the route @koa/router / koa-router matched
+    if (deps.names.has('koa') && !disabled.has('server')) {
+      try {
+        restores.push(labelKoaRoutes(appRequire('koa')));
+      } catch {
+        // labels stay URL-based
+      }
+    }
     // Fastify: label requests by route. The app gets the wrapped factory
     // (require and import both read the module cache, filled here first).
     if (deps.names.has('fastify') && !disabled.has('server')) {

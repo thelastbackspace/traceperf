@@ -10,6 +10,7 @@ import {
   instrumentHttp,
   instrumentHttpServer,
   instrumentMethods,
+  labelKoaRoutes,
   prismaExtension,
   wrapFastifyFactory,
 } from '../index';
@@ -181,5 +182,33 @@ describe('Fastify route labels (wrapFastifyFactory)', () => {
     expect(roots.map(r => r.label)).toEqual(['GET /articles/:slug', 'GET /articles/:slug', 'GET /api/profiles/:name', 'GET /nope']);
     expect(wrapFastifyFactory(fastify)).toBe(fastify); // idempotent
     expect(fastify.fastify).toBe(fastify);
+  });
+});
+
+describe('Koa route labels (labelKoaRoutes)', () => {
+  test('requests are labelled by the route @koa/router matched, prefixes included', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Koa = require('koa');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Router = require('@koa/router');
+    const { tp, roots } = setup();
+    const uninstall = instrumentHttpServer(tp);
+    const unlabel = labelKoaRoutes(Koa);
+    expect(labelKoaRoutes(Koa)()).toBeUndefined(); // idempotent: second call is a no-op
+    const app = new Koa();
+    const api = new Router({ prefix: '/api' });
+    api.get('/users/:id', (ctx: any) => { ctx.body = 'ok'; });
+    app.use(api.routes());
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      await new Promise(r => server.once('listening', r));
+      const port = (server.address() as AddressInfo).port;
+      for (const p of ['/api/users/1', '/api/users/2', '/other']) await get(`http://127.0.0.1:${port}${p}`);
+    } finally {
+      await new Promise(r => server.close(r));
+      unlabel();
+      uninstall();
+    }
+    expect(roots.map(r => r.label)).toEqual(['GET /api/users/:id', 'GET /api/users/:id', 'GET /other']);
   });
 });
