@@ -76,6 +76,13 @@ describe('explain()', () => {
     expect(explain([hash], { hotspots: lib }).find(f => f.kind === 'blocking')!.fix).toMatch(/^the time is inside pg \(library code\)/);
   });
 
+  test('a call that leads several routes (auth middleware) is not part of a sequential run', () => {
+    const route = (label: string, next: string) => node(label, 0, 30, { selfDuration: 1, children: [node('mongo findOne users', 0, 10), node(next, 10, 19)] });
+    expect(explain([route('GET /a', 'mongo find posts'), route('GET /b', 'mongo countDocuments x')]).filter(f => f.kind === 'sequential')).toEqual([]);
+    // In one route only, it is just two awaits in a row
+    expect(explain([route('GET /a', 'mongo find posts')]).filter(f => f.kind === 'sequential')).toHaveLength(1);
+  });
+
   test("a library's own sequential or repeated calls are not reported", () => {
     const include = node('GET /feed', 0, 40, { children: [
       node('prisma.Post.findMany', 0, 40, { children: [node('pg SELECT public.Post', 0, 20), node('pg SELECT public.User', 20, 20)] }),

@@ -102,22 +102,23 @@ jobs:
     - run: node scripts/verify-package.js --runtime
 
   # Browser builds in real Chromium, Firefox and WebKit.
+  # Playwright's image has the browsers and their system libraries: no apt
+  # step (the runner's apt mirror stalled for 15+ minutes more than once).
+  # Keep the tag equal to the installed @playwright/test version.
   browser:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+      options: --user 1001
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22.x
-        cache: 'npm'
     - run: npm ci
     - uses: actions/download-artifact@v4
       with:
         name: dist
         path: dist
-    - run: npx playwright install --with-deps chromium firefox webkit
     - run: npm run test:browser
 
   # Bun and Deno run the ESM build (nesting, stats, exporters, browser entry).

@@ -271,7 +271,12 @@ export function instrumentHttpServer(tp: OptimizedPerformanceMonitor, options: H
         ended = true;
         // Express (4, 5, and Nest on it) knows the route: "/api/articles/:slug", not the slug itself
         const route = !labelFor && req.route && typeof req.route.path === 'string' ? req.route.path : undefined;
-        if (route) span.setLabel(`${req.method || 'GET'} ${typeof req.baseUrl === 'string' ? req.baseUrl : ''}${route}`);
+        if (route) {
+          const base = typeof req.baseUrl === 'string' ? req.baseUrl : '';
+          // router.route('/') under app.use('/v1/users') is "/v1/users", not "/v1/users/"
+          const full = base && route === '/' ? base : `${base}${route}`;
+          span.setLabel(`${req.method || 'GET'} ${full}`);
+        }
         span.end(error);
       };
       res.once('finish', () => end(res.statusCode >= errorStatus ? new Error(`HTTP ${res.statusCode}`) : undefined));

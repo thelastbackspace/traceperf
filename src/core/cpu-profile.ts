@@ -69,6 +69,11 @@ export interface ProfileSlowCallsOptions {
    * calls that blocked the event loop.
    */
   select?: (root: ExecutionRecord) => Array<{ call: ExecutionRecord; start: number; end: number }>;
+  /**
+   * Called with each whole sampling window (where all the CPU time went, not
+   * only inside slow calls), with its start and end (performance.now() clock).
+   */
+  onWindow?: (profile: SlowCallProfile, start: number, end: number) => void;
 }
 
 export interface SlowCallProfiler extends TracePerfPlugin {
@@ -384,6 +389,7 @@ export function profileSlowCalls(options: ProfileSlowCallsOptions): SlowCallProf
       const calls = pending;
       pending = [];
       const startNow = windowStartNow;
+      const endNow = nowMs();
       const { profile } = await post('Profiler.stop');
       if (restart && !stopped) await startWindow();
       if (hints) learnInlineHints(profile, hints, options.exclude);
@@ -397,6 +403,13 @@ export function profileSlowCalls(options: ProfileSlowCallsOptions): SlowCallProf
         }
         try {
           options.onProfile(call, result);
+        } catch {
+          // a failing callback must not stop profiling
+        }
+      }
+      if (options.onWindow) {
+        try {
+          options.onWindow(summariseProfile(profile, startNow + offset, endNow + offset, Math.max(top, 10), options.exclude, { mergeInlined: hints }), startNow, endNow);
         } catch {
           // a failing callback must not stop profiling
         }

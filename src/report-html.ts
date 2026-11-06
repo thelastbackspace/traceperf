@@ -7,7 +7,7 @@ import type { Call } from './cli';
 import type { LabelStats } from './core/stats';
 import type { Finding } from './core/explain';
 
-const ICON: Record<string, string> = { error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●', queued: '⏳' };
+const ICON: Record<string, string> = { error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●', queued: '⏳', busy: '🔥' };
 
 const esc = (s: unknown): string => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

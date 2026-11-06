@@ -23,7 +23,8 @@ export interface ExplainNode {
   children: ExplainNode[];
 }
 
-export type FindingKind = 'blocked' | 'blocking' | 'sequential' | 'repeated' | 'dominant' | 'error';
+/** 'busy' (the process was saturated) comes from traceperf run, which measures the whole process */
+export type FindingKind = 'blocked' | 'blocking' | 'sequential' | 'repeated' | 'dominant' | 'error' | 'busy';
 
 export interface Finding {
   kind: FindingKind;
@@ -153,6 +154,19 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
   const blockers: Blocker[] = [];
   roots.forEach((root, i) => collectBlockers(root, i, blockingMs, blockers));
 
+  // A call that comes first in several different routes is shared middleware
+  // (auth loading the user, a session lookup): the handler depends on it,
+  // so it is not part of a run that Promise.all could shorten
+  const leadsRoutes = new Map<string, Set<string>>();
+  for (const root of roots) {
+    const first = root.children.filter(k => k.async).sort((a, b) => a.startTime - b.startTime)[0];
+    if (!first) continue;
+    const set = leadsRoutes.get(first.label) ?? new Set<string>();
+    set.add(root.label);
+    leadsRoutes.set(first.label, set);
+  }
+  const middleware = (label: string) => (leadsRoutes.get(label)?.size || 0) >= 2;
+
   roots.forEach((root, i) => {
     const rootLabel = root.label;
     const rootEnd = root.startTime + root.duration;
@@ -217,6 +231,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
       const labelCount = new Map<string, number>();
       for (const k of kids) labelCount.set(k.label, (labelCount.get(k.label) || 0) + 1);
       const flush = () => {
+        if (node === root && run.length > 0 && middleware(run[0].label)) run = run.slice(1);
         // A run of one label repeated many times is the N+1 finding below
         const repeated = run.filter(k => (labelCount.get(k.label) || 0) >= repeatCount).length;
         const nPlusOne = repeated > 0 && repeated >= run.length - 1;
@@ -369,7 +384,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     if (g.ms < minMs || rare) grouped.delete(key);
     else if (g.kind !== 'blocking' && g.roots.size === 1 && total > g.times) share.set(g, `in ${g.times} of ${total} ${g.root}`);
   }
-  const order: Record<FindingKind, number> = { error: 0, blocked: 1, blocking: 2, repeated: 3, sequential: 4, dominant: 5 };
+  const order: Record<FindingKind, number> = { error: 0, busy: 1, blocked: 1, blocking: 2, repeated: 3, sequential: 4, dominant: 5 };
   return [...grouped.values()]
     // Failures first: they matter more than timing; then by total time involved
     .sort((a, b) => Number(b.kind === 'error') - Number(a.kind === 'error') || b.ms * b.times - a.ms * a.times || order[a.kind] - order[b.kind])
@@ -461,7 +476,7 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, me
 }
 
 const ICON: Record<FindingKind, string> = {
-  error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●',
+  error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●', busy: '🔥',
 };
 
 /** Render findings as text, one per line (and the fix, if any, below it) */
