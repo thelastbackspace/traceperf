@@ -169,3 +169,87 @@ describe('runApp', () => {
     expect(out.join('\n')).toContain('no requests were tracked');
   }, 30000);
 });
+
+describe('naming blocking code from CPU profiles', () => {
+  // A tiny V8-shaped profile: root > handler > buildReport, plus samples where
+  // buildReport was inlined into handler (attributed to handler), and a native
+  // frame under hashPassword > pbkdf2Sync (node:internal)
+  const { summariseProfile, createInlineHints, learnInlineHints, blockingHotspots } = jest.requireActual('../core/cpu-profile');
+  const frame = (functionName: string, url: string, lineNumber: number) => ({ functionName, url, lineNumber, columnNumber: 0, scriptId: '1' });
+  const profile = {
+    startTime: 0,
+    nodes: [
+      { id: 1, callFrame: frame('(root)', '', -1), children: [2, 5] },
+      { id: 2, callFrame: frame('handler', 'file:///app/server.js', 14), children: [3], positionTicks: [{ line: 15, ticks: 6 }] },
+      { id: 3, callFrame: frame('buildReport', 'file:///app/server.js', 2), children: [], positionTicks: [{ line: 6, ticks: 4 }] },
+      { id: 5, callFrame: frame('hashPassword', 'file:///app/server.js', 19), children: [6] },
+      { id: 6, callFrame: frame('pbkdf2Sync', 'node:internal/crypto/pbkdf2', 40), children: [7] },
+      { id: 7, callFrame: frame('run', '', -1), children: [] },
+    ],
+    // 6 samples in handler (inlined buildReport), 4 in buildReport, 5 native
+    samples: [2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 7, 7, 7, 7, 7],
+    timeDeltas: Array(15).fill(1000),
+  };
+
+  it('without merging, self time stays where V8 put it', () => {
+    const p = summariseProfile(profile, 0, 100, 5);
+    expect(p.hotspots[0].functionName).toBe('handler');
+  });
+
+  it('moves inlined self time to the callee and names native code by its caller', () => {
+    const p = summariseProfile(profile, 0, 100, 5, undefined, { mergeInlined: true });
+    const names = p.hotspots.map((h: any) => h.functionName);
+    expect(names[0]).toBe('buildReport');
+    expect(p.hotspots[0].selfMs).toBeCloseTo(10, 0);
+    expect(p.hotspots[0].hotLine).toBe(6);
+    expect(names).toContain('hashPassword → pbkdf2Sync');
+    expect(names).not.toContain('handler');
+  });
+
+  it('remembers callers across windows, when a later window only has the inlined form', () => {
+    const hints = createInlineHints();
+    learnInlineHints(profile, hints);
+    const later = { ...profile, nodes: profile.nodes.map(n => (n.id === 2 ? { ...n, children: [] } : n)).filter(n => n.id !== 3), samples: [2, 2, 2], timeDeltas: [1000, 1000, 1000] };
+    learnInlineHints(later, hints);
+    const p = summariseProfile(later, 0, 100, 5, undefined, { mergeInlined: hints });
+    expect(p.hotspots[0].functionName).toBe('buildReport');
+  });
+
+  it('sums hotspots per label and function, with paths relative to cwd', () => {
+    const spots = blockingHotspots([
+      { label: 'GET /r', hotspots: [{ functionName: 'f', url: 'file:///app/a.js', line: 3, column: 1, selfMs: 4, hotLine: 5 }] },
+      { label: 'GET /r', hotspots: [{ functionName: 'f', url: 'file:///app/a.js', line: 3, column: 1, selfMs: 1 }, { functionName: 'g', url: '', line: 0, column: 0, selfMs: 2 }] },
+    ], { cwd: '/app' });
+    expect(spots['GET /r']).toEqual([
+      { functionName: 'f', location: 'a.js:5', ms: 5 },
+      { functionName: 'g', location: '', ms: 2 },
+    ]);
+  });
+
+  it('explain names the function in blocking and blocked findings', () => {
+    const roots: ExplainNode[] = [
+      { label: 'GET /report', startTime: 0, duration: 40, selfDuration: 40, syncDuration: 40, async: true, children: [] },
+      { label: 'GET /users', startTime: 1, duration: 45, selfDuration: 45, syncDuration: 0, async: true, children: [] },
+    ];
+    const findings = explain(roots, { hotspots: { 'GET /report': [{ functionName: 'buildReport', location: 'server.js:10', ms: 38 }, { functionName: 'tiny', location: 'x.js:1', ms: 0.5 }] } });
+    const blocking = findings.find(f => f.kind === 'blocking')!;
+    expect(blocking.message).toContain('CPU time: buildReport (server.js:10) 99%');
+    expect(blocking.message).not.toContain('tiny'); // under 5%
+    expect(blocking.call).toBe('GET /report');
+    expect(findings.find(f => f.kind === 'blocked')!.message).toContain('blocked the event loop, in buildReport (server.js:10)');
+  });
+});
+
+describe('queueFindings', () => {
+  const { queueFindings } = jest.requireActual('../run');
+  it('reports time clients waited that the app never saw', () => {
+    const load = { requests: 4, errors: 0, statuses: {}, durationMs: 1, latency: { '/ping': [180, 190, 185, 200], '/slow': [60, 61, 59, 60] } };
+    const trees = [
+      ...[0.2, 0.3, 0.2, 0.2].map(d => ({ label: 'GET /ping', duration: d })),
+      ...[55, 58, 57, 56].map(d => ({ label: 'GET /slow', duration: d })),
+    ];
+    const findings = queueFindings(load, trees, 'GET');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain('GET /ping took 0.2 ms in the app (median) but clients waited 190 ms');
+  });
+});

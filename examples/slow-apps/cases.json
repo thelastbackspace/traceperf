@@ -1,25 +1,87 @@
 {
   "blocking": {
-    "paths": ["/report", "/users"],
+    "paths": [
+      "/report",
+      "/users"
+    ],
     "expect": [
-      { "kind": "blocking", "includes": "GET /report" },
-      { "kind": "blocked", "includes": "GET /report" }
+      {
+        "kind": "blocking",
+        "includes": "GET /report"
+      },
+      {
+        "kind": "blocking",
+        "includes": "buildReport"
+      },
+      {
+        "kind": "blocked",
+        "includes": "GET /report"
+      }
     ]
   },
   "sequential": {
-    "paths": ["/dashboard"],
-    "expect": [{ "kind": "sequential", "includes": "awaited 3 calls" }]
+    "paths": [
+      "/dashboard"
+    ],
+    "expect": [
+      {
+        "kind": "sequential",
+        "includes": "awaited 3 calls"
+      }
+    ]
   },
   "n-plus-one": {
-    "paths": ["/orders"],
-    "expect": [{ "kind": "repeated", "includes": "SELECT * FROM items WHERE order_id = ? 12 times" }]
+    "paths": [
+      "/orders"
+    ],
+    "expect": [
+      {
+        "kind": "repeated",
+        "includes": "SELECT * FROM items WHERE order_id = ? 12 times"
+      }
+    ]
   },
   "slow-dependency": {
-    "paths": ["/checkout"],
-    "expect": [{ "kind": "dominant", "includes": "POST payments.example/charge" }]
+    "paths": [
+      "/checkout"
+    ],
+    "expect": [
+      {
+        "kind": "dominant",
+        "includes": "POST payments.example/charge"
+      }
+    ]
   },
   "errors": {
-    "paths": ["/pay"],
-    "expect": [{ "kind": "error", "includes": "payment provider timed out" }]
+    "paths": [
+      "/pay"
+    ],
+    "expect": [
+      {
+        "kind": "error",
+        "includes": "payment provider timed out"
+      }
+    ]
+  },
+  "blocking-native": {
+    "paths": [
+      "/export",
+      "/login",
+      "/ping"
+    ],
+    "expect": [
+      {
+        "kind": "blocking",
+        "includes": "exportCatalog"
+      },
+      {
+        "kind": "blocking",
+        "includes": "hashPassword → pbkdf2Sync"
+      },
+      {
+        "kind": "blocked",
+        "includes": "GET /ping took"
+      }
+    ]
   }
 }

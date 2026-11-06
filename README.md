@@ -76,20 +76,26 @@ load: 230 requests in 5.0 s (46/s), 230× 200
 ...per-route and per-query p50/p95/p99...
 
 Why it was slow:
-⏳ GET /users waited ~165 ms (95% of its 174 ms) while GET /report blocked the event loop
-🔥 GET /report ran 46 ms of synchronous code, blocking everything else in the process for that long
+🔥 GET /report ran 48 ms of synchronous code, blocking everything else in the process for that long; CPU time: buildReport (server.js:10) 100%
+⏳ GET /users waited ~165 ms (95% of its 174 ms) while GET /report blocked the event loop, in buildReport (server.js:10)
 ● SELECT * FROM users took 100% of GET /users (174 ms of 174 ms), but ~165 ms of that was waiting for blocking code elsewhere
 ```
 
-The database was fast; `GET /report` was blocking it. That only shows up when requests overlap, which is why `run` sends concurrent traffic.
+The database was fast; `buildReport` was blocking it. That only shows up when requests overlap, which is why `run` sends concurrent traffic.
+
+- **The blocking function is named even though nothing tracks it:** `run` samples the CPU (the V8 profiler) during the synchronous part of each blocking call. Native work is named by the app function that called it (`hashPassword → pbkdf2Sync`), code V8 inlined is credited to the inlined function, and garbage-collection pauses are reported as such. `--no-profile` turns this off.
+- **Queueing the app can't see:** a request that arrives while the event loop is blocked waits in the socket before its handler starts. `run` compares what its clients waited with the app's own timings and reports the difference.
 
 - `--path /x` (repeatable): what to request. Without `--path`, use the app yourself and press Ctrl-C for the report.
 - `-c 10` concurrency, `-d 5s` duration or `-n 500` requests, `--method POST`, `--port 3000` (detected by default).
 - `--html report.html`, `--output calls.jsonl` (keep the trees), `--json`.
 - `--warmup 3`: untimed requests per path first, so cold-start work doesn't look like a problem.
+- `--no-profile`: don't sample the CPU.
 - Any start command works: `npx traceperf run -- npm start`.
 
-`examples/slow-apps/` has small apps with one planted problem each (blocking, sequential awaits, N+1, a slow dependency, errors); CI checks that `run` names each one.
+`examples/slow-apps/` has small apps with one planted problem each (blocking in your code, blocking in built-ins, sequential awaits, N+1, a slow dependency, errors); CI checks that `run` names each one.
+
+The same naming works without `run`: `TRACEPERF_PROFILE_BLOCKING=1 node --require traceperf/auto server.js` adds the function names to the exit summary (sampling costs a few percent CPU, so use it while investigating). In code: `profileSlowCalls({ select: root => blockingRanges(root), mergeInlined: true, onProfile })`, then `explain(roots, { hotspots })`.
 
 ## No code changes: `traceperf/auto`
 

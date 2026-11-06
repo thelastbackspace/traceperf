@@ -9,6 +9,8 @@
  * Node-only; builtins are passed in so this module stays free of require().
  */
 import { explain, formatFindings, Finding } from './core/explain';
+import { blockingHotspots, BlockingProfileEntry } from './core/cpu-profile';
+import { normalizePath } from './instrument';
 
 export interface RunArgs {
   /** Command and its arguments; a .js/.mjs/.cjs file runs with this Node */
@@ -26,6 +28,8 @@ export interface RunArgs {
   output?: string;
   json: boolean;
   max: number;
+  /** Sample the CPU to name blocking code (default on) */
+  profile: boolean;
   /** Ms to wait for the app to listen before giving up */
   startTimeoutMs: number;
 }
@@ -42,7 +46,9 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --warmup 3       untimed requests per path first (cold start), 0 for none
       --html out.html  write an HTML report
       --output f.jsonl keep the raw request trees
-      --json           print stats and findings as JSON`;
+      --json           print stats and findings as JSON
+      --no-profile     don't sample the CPU (blocking code is then named
+                       only by its tracked call)`;
 
 function parseDuration(value: string | undefined): number | undefined {
   const m = /^(\d+(?:\.\d+)?)(ms|s|m)?$/.exec(value || '');
@@ -55,7 +61,7 @@ function parseDuration(value: string | undefined): number | undefined {
 export function parseRunArgs(argv: string[]): RunArgs | string {
   const args: RunArgs = {
     command: [], paths: [], concurrency: 10, durationMs: 5000, host: '127.0.0.1',
-    method: 'GET', warmup: 3, json: false, max: 10, startTimeoutMs: 15000,
+    method: 'GET', warmup: 3, json: false, profile: true, max: 10, startTimeoutMs: 15000,
   };
   const num = (name: string, v: string | undefined): number | string => {
     const n = Number(v);
@@ -108,6 +114,7 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
         break;
       }
       case '--json': args.json = true; break;
+      case '--no-profile': args.profile = false; break;
       default:
         // Our options can come before or after the app; anything else after
         // the app is the app's own argument (use -- to pass everything as is)
@@ -124,21 +131,27 @@ export interface LoadResult {
   errors: number;
   statuses: Record<string, number>;
   durationMs: number;
+  /** Client-side latency per path (ms), as the load generator saw it */
+  latency: Record<string, number[]>;
 }
 
 /** Send concurrent requests until the duration or request count is reached */
 export function sendLoad(http: any, args: RunArgs, port: number): Promise<LoadResult> {
   const agent = new http.Agent({ keepAlive: true, maxSockets: args.concurrency });
-  const result: LoadResult = { requests: 0, errors: 0, statuses: {}, durationMs: 0 };
+  const result: LoadResult = { requests: 0, errors: 0, statuses: {}, durationMs: 0, latency: {} };
   const start = Date.now();
   const deadline = start + args.durationMs;
   let issued = 0;
   const more = () => (args.requests !== undefined ? issued < args.requests : Date.now() < deadline);
   const one = (path: string) => new Promise<void>(resolve => {
+    const sent = Date.now();
     const req = http.request({ host: args.host, port, path, method: args.method, agent }, (res: any) => {
       result.statuses[res.statusCode] = (result.statuses[res.statusCode] || 0) + 1;
       res.resume();
-      res.on('end', resolve);
+      res.on('end', () => {
+        (result.latency[path] = result.latency[path] || []).push(Date.now() - sent);
+        resolve();
+      });
       res.on('error', resolve);
     });
     req.setTimeout(30000, () => req.destroy(new Error('timeout')));
@@ -162,19 +175,59 @@ export function sendLoad(http: any, args: RunArgs, port: number): Promise<LoadRe
   });
 }
 
+const percentile = (values: number[], p: number): number => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+};
+
+/**
+ * Time clients waited that the app never saw: a request that arrives while
+ * the event loop is blocked waits in the socket before its handler starts,
+ * so the server-side duration misses it. Compares the load generator's
+ * latency with the request trees, per path.
+ */
+export function queueFindings(load: LoadResult, trees: Array<{ label: string; duration: number }>, method: string): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, latencies] of Object.entries(load.latency)) {
+    const label = `${method} ${normalizePath(path)}`;
+    const server = trees.filter(t => t.label === label).map(t => t.duration);
+    if (server.length === 0 || latencies.length === 0) continue;
+    const client50 = percentile(latencies, 50);
+    const server50 = percentile(server, 50);
+    const gap = client50 - server50;
+    if (gap >= 10 && gap >= 0.5 * client50) {
+      findings.push({
+        kind: 'blocked',
+        root: label,
+        ms: gap * latencies.length,
+        message: `${label} took ${server50.toFixed(1)} ms in the app (median) but clients waited ${client50.toFixed(0)} ms: requests sat queued until the event loop was free (see blocking code above)`,
+      });
+    }
+  }
+  return findings;
+}
+
 export interface RunSummary {
   stats: string;
   findings: Finding[];
   trees: number;
 }
 
-/** Stats and findings from the JSON lines the app wrote */
-export function summarise(text: string, deps: { report: (t: string, o: any) => string; parseTrees: (t: string) => any[] }, max = 10): RunSummary {
+/** Stats and findings from the JSON lines the app wrote (and its blocking profiles) */
+export function summarise(
+  text: string,
+  deps: { report: (t: string, o: any) => string; parseTrees: (t: string) => any[] },
+  max = 10,
+  profiles: BlockingProfileEntry[] = [],
+  cwd?: string,
+): RunSummary {
   const trees = deps.parseTrees(text);
+  const hotspots = profiles.length ? blockingHotspots(profiles, { cwd }) : undefined;
   return {
     trees: trees.length,
     stats: trees.length ? deps.report(text, { top: 5 }) : '',
-    findings: explain(trees, { max }),
+    findings: explain(trees, { max, hotspots }),
   };
 }
 
@@ -200,6 +253,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'traceperf-run-'));
   const output = args.output ? path.resolve(args.output) : path.join(dir, 'calls.jsonl');
   const readyFile = path.join(dir, 'port');
+  const profileFile = path.join(dir, 'profiles.jsonl');
   if (args.output) fs.writeFileSync(output, '');
   const env: Record<string, string> = {
     ...process.env,
@@ -207,6 +261,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     TRACEPERF_SILENT: '1',
     TRACEPERF_SUMMARY: '0',
     TRACEPERF_READY_FILE: readyFile,
+    ...(args.profile ? { TRACEPERF_PROFILE_BLOCKING: '1', TRACEPERF_PROFILE_OUTPUT: profileFile } : {}),
   } as Record<string, string>;
   const [cmd, ...cmdArgs] = args.command;
   const quoted = JSON.stringify(deps.registerPath);
@@ -280,7 +335,21 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   } catch {
     text = '';
   }
-  const summary = summarise(text, deps, args.max);
+  const profiles: BlockingProfileEntry[] = [];
+  try {
+    for (const line of fs.readFileSync(profileFile, 'utf8').split('\n')) {
+      if (line.trim()) profiles.push(JSON.parse(line));
+    }
+  } catch {
+    // no profiles: --no-profile, no inspector, or nothing blocked
+  }
+  const summary = summarise(text, deps, args.max, profiles, process.cwd());
+  if (load) {
+    const queued = queueFindings(load, deps.parseTrees(text), args.method);
+    // After blocking findings, which explain them
+    const after = summary.findings.filter(f => f.kind === 'error' || f.kind === 'blocking').length;
+    summary.findings.splice(after, 0, ...queued);
+  }
   if (args.html && summary.trees) {
     fs.writeFileSync(args.html, deps.report(text, { html: true, title: `traceperf run: ${args.command.join(' ')}` }));
   }
