@@ -159,7 +159,7 @@ describe('runApp', () => {
     const html = path.join(dir, 'r.html');
     const output = path.join(dir, 'calls.jsonl');
     const out: string[] = [];
-    const args = parseRunArgs([path.join(APPS, 'sequential', 'server.js'), '--path', '/dashboard', '-n', '20', '--html', html, '--output', output, '--warmup', '0']) as RunArgs;
+    const args = parseRunArgs([path.join(APPS, 'sequential', 'server.js'), '--path', '/dashboard', '-n', '20', '--html', html, '--output', output, '--warmup', '0', '--probe', '0']) as RunArgs;
     expect(await runApp(args, deps(out))).toBe(0);
     const text = out.join('\n');
     expect(text).toContain('load: 20 requests');
@@ -256,6 +256,21 @@ describe('naming blocking code from CPU profiles', () => {
     expect(blocking.message).not.toContain('tiny'); // under 5%
     expect(blocking.call).toBe('GET /report');
     expect(findings.find(f => f.kind === 'blocked')!.message).toContain('blocked the event loop, in buildReport (server.js:10)');
+  });
+});
+
+describe('statusFinding', () => {
+  const { statusFinding } = jest.requireActual('../run');
+  const load = (statuses: Record<string, number>, errors = 0) => ({ requests: 10, errors, statuses, durationMs: 1, latency: {} });
+  it('warns when most responses failed, with a hint for the status', () => {
+    const f = statusFinding(load({ 401: 9, 200: 1 }));
+    expect(f.message).toBe('9 of 10 responses failed (most: 9× 401 Unauthorized), so the timings below describe error responses, not the endpoints');
+    expect(f.fix).toMatch(/-H "Authorization: Bearer \$TOKEN"/);
+    expect(statusFinding(load({ 404: 6, 200: 4 })).fix).toMatch(/--path/);
+    expect(statusFinding(load({}, 5)).message).toMatch(/most: 5× connection error/);
+  });
+  it('says nothing when most succeeded', () => {
+    expect(statusFinding(load({ 200: 8, 500: 2 }))).toBeUndefined();
   });
 });
 

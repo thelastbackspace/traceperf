@@ -142,10 +142,13 @@ describe('explain()', () => {
     // A request that makes one call is always mostly that call: not worth saying unless it is slow
     expect(explain([node('GET /a', 0, 21, { selfDuration: 1, children: [node('db', 0, 20)] })])).toEqual([]);
     expect(explain([node('GET /a', 0, 151, { selfDuration: 1, children: [node('db', 0, 150)] })])[0].kind).toBe('dominant');
-    // 9 requests where the query is 4 ms of 5 ms, one where the first connection made it 110 ms
-    const roots = [110, ...Array(9).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
+    // 7 requests where the query is 4 ms of 5 ms, one where the first connection made it 110 ms
+    const roots = [110, ...Array(7).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
     const [once] = explain(roots).filter(f => f.kind === 'dominant');
-    expect(once.message).toMatch(/\(in 1 of 10 GET \/users\)$/);
+    expect(once.message).toMatch(/\(in 1 of 8 GET \/users\)$/);
+    // once in 10 or more is an outlier
+    const ten = [110, ...Array(9).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
+    expect(explain(ten).filter(f => f.kind === 'dominant')).toEqual([]);
     // ... and once in 40 requests is noise
     const many = [110, ...Array(39).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
     expect(explain(many).filter(f => f.kind === 'dominant')).toEqual([]);
