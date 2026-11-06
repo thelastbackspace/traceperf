@@ -146,7 +146,7 @@ describe('runApp', () => {
     expect(text).toContain('load: 20 requests');
     expect(text).toContain('Why it was slow:');
     expect(text).toContain('Promise.all');
-    expect(fs.readFileSync(html, 'utf8')).toContain('<html');
+    expect(fs.readFileSync(html, 'utf8')).toMatch(/<html[\s\S]*Why it was slow/);
     expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(20);
     fs.rmSync(dir, { recursive: true, force: true });
   }, 30000);

@@ -351,7 +351,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     summary.findings.splice(after, 0, ...queued);
   }
   if (args.html && summary.trees) {
-    fs.writeFileSync(args.html, deps.report(text, { html: true, title: `traceperf run: ${args.command.join(' ')}` }));
+    fs.writeFileSync(args.html, deps.report(text, { html: true, findings: summary.findings, title: `traceperf run: ${args.command.join(' ')}` }));
   }
   if (args.json) {
     deps.out(JSON.stringify({ load, trees: summary.trees, findings: summary.findings }, null, 2));

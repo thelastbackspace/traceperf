@@ -10,7 +10,7 @@
  */
 import { ExecutionRecord } from './core/records';
 import { LabelStats, StatsCollector, formatStatsTable } from './core/stats';
-import { explain, ExplainNode, ExplainOptions, formatFindings } from './core/explain';
+import { explain, ExplainNode, ExplainOptions, Finding, formatFindings } from './core/explain';
 import { renderHtmlReport } from './report-html';
 import { createWatcher, WatchOptions } from './watch';
 import { parseRunArgs, runApp, RUN_USAGE } from './run';
@@ -22,6 +22,8 @@ export interface ReportOptions {
   title?: string;
   sort?: 'total' | 'mean' | 'p95' | 'max' | 'count';
   json?: boolean;
+  /** Findings for the HTML report (default: explain() on the input) */
+  findings?: Finding[];
 }
 
 export interface Call {
@@ -45,6 +47,10 @@ function record(label: string, duration: number, selfDuration: number, error?: s
     trackingMode: 'balanced', silent: true, ...(error ? { error: new Error(error) } : {}),
   };
 }
+
+/** Start in epoch ms: exact startMs when present (ISO strings are rounded to the ms) */
+const startOf = (node: any): number =>
+  typeof node.startMs === 'number' ? node.startMs : typeof node.start === 'string' ? Date.parse(node.start) : 0;
 
 /** Parse a Chrome trace or JSON-lines document into flat calls */
 export function parseCalls(text: string): Call[] {
@@ -88,7 +94,7 @@ export function parseCalls(text: string): Call[] {
   const laneEnds: number[] = [];
   const visit = (node: any, parents: string[], lane: number) => {
     const path = [...parents, node.label].join(' > ');
-    const start = typeof node.start === 'string' ? Date.parse(node.start) : 0;
+    const start = startOf(node);
     calls.push({
       label: node.label,
       path,
@@ -122,7 +128,7 @@ export function parseCalls(text: string): Call[] {
     if (typeof node.label !== 'string' || typeof node.durationMs !== 'number') {
       throw new Error(`line ${i + 1} is not a traceperf record`);
     }
-    const start = typeof node.start === 'string' ? Date.parse(node.start) : 0;
+    const start = startOf(node);
     visit(node, [], pickLane(start, start + node.durationMs));
   });
   return calls;
@@ -166,7 +172,7 @@ export function parseTrees(text: string): ExplainNode[] {
   }
   const convert = (n: any): ExplainNode => ({
     label: n.label,
-    startTime: typeof n.startMs === 'number' ? n.startMs : typeof n.start === 'string' ? Date.parse(n.start) : 0,
+    startTime: startOf(n),
     duration: n.durationMs,
     selfDuration: typeof n.selfMs === 'number' ? n.selfMs : n.durationMs,
     syncDuration: typeof n.syncMs === 'number' ? n.syncMs : undefined,
@@ -233,7 +239,15 @@ export function report(text: string, options: ReportOptions = {}): string {
   const slowest = calls.slice().sort((a, b) => b.duration - a.duration).slice(0, top);
 
   if (options.html) {
-    return renderHtmlReport(calls, stats, { title: options.title, top: options.top ?? 20 });
+    let findings = options.findings;
+    if (!findings) {
+      try {
+        findings = explain(parseTrees(text), { max: 10 });
+      } catch {
+        findings = [];
+      }
+    }
+    return renderHtmlReport(calls, stats, { title: options.title, top: options.top ?? 20, findings });
   }
   if (options.json) {
     return JSON.stringify({ calls: calls.length, stats, slowest }, null, 2);
