@@ -66,11 +66,13 @@ export interface SlowCallProfiler extends TracePerfPlugin {
   stop(): Promise<void>;
 }
 
-interface CpuProfileNode {
+/** A node in a V8 CPU profile */
+export interface CpuProfileNode {
   id: number;
   callFrame: { functionName: string; url: string; lineNumber: number; columnNumber: number };
 }
-interface CpuProfile {
+/** A V8 CPU profile (inspector Profiler.stop result) */
+export interface CpuProfile {
   nodes: CpuProfileNode[];
   startTime: number;
   samples: number[];
