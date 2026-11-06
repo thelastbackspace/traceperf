@@ -42,6 +42,7 @@ Measured on Node 24 (AMD EPYC). Reproduce with `npm run bench` and `npm run benc
 | Incoming request (`traceperf/auto`, `instrumentHttpServer`) | ~4.4 µs per request; ~1.4 µs when sampled out at 10% |
 | Writing each request tree as JSON lines | ~5 µs more per request (`JSON.stringify` plus the write) |
 | `profileSlowCalls` (V8 sampling profiler at 1 ms) | 0–6% CPU on CPU-bound code in our runs |
+| `TRACEPERF_PROFILE_BLOCKING=1` (names blocking code) | the same sampling profiler; use while investigating |
 | OpenTelemetry span via the live exporter | ~16 µs per call (mostly the OpenTelemetry SDK itself) |
 
 A request that takes 1 ms pays well under 1% for full tracking. On a hello-world HTTP server running in a separate process, the difference with and without `traceperf/auto` was smaller than run-to-run noise.

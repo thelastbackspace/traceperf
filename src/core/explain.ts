@@ -33,6 +33,17 @@ export interface Finding {
   message: string;
   /** Estimated milliseconds involved (delay, possible saving, or time taken) */
   ms: number;
+  /** For blocking / blocked: the call whose synchronous code blocked */
+  call?: string;
+}
+
+/** Where a blocking call spent its CPU time (from the sampling profiler) */
+export interface BlockingHotspot {
+  functionName: string;
+  /** File and line, e.g. "src/report.js:12" ("" for native code) */
+  location: string;
+  /** Sampled self time, ms */
+  ms: number;
 }
 
 export interface ExplainOptions {
@@ -46,6 +57,11 @@ export interface ExplainOptions {
   repeatCount?: number;
   /** Return at most this many findings, largest first (default 20) */
   max?: number;
+  /**
+   * CPU hotspots per blocking call label, e.g. from profileSlowCalls with
+   * blockingRanges(): blocking findings then name the function that ran.
+   */
+  hotspots?: Record<string, BlockingHotspot[]>;
 }
 
 const fmt = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(ms < 10 ? 1 : 0)} ms`);
@@ -57,6 +73,7 @@ function syncOf(node: ExplainNode): number {
 }
 
 interface Blocker {
+  node: ExplainNode;
   label: string;
   root: number;
   start: number;
@@ -72,10 +89,21 @@ function collectBlockers(node: ExplainNode, rootIndex: number, threshold: number
   const sync = syncOf(node);
   // Attribute to this node only the blocking its blocking children do not explain
   if (sync >= threshold && sync - childBlocked >= threshold) {
-    out.push({ label: node.label, root: rootIndex, start: node.startTime, end: node.startTime + sync });
+    out.push({ node, label: node.label, root: rootIndex, start: node.startTime, end: node.startTime + sync });
     return true;
   }
   return childBlocked > 0;
+}
+
+/**
+ * The calls whose synchronous code blocked the event loop for at least
+ * `blockingMs`, deepest first, with the blocking time range (same clock as
+ * the records). Pass to profileSlowCalls({ select }) to see what ran.
+ */
+export function blockingRanges<T extends ExplainNode>(root: T, blockingMs = 10): Array<{ call: T; start: number; end: number }> {
+  const out: Blocker[] = [];
+  collectBlockers(root, 0, blockingMs, out);
+  return out.map(b => ({ call: b.node as T, start: b.start, end: b.end }));
 }
 
 function overlap(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
@@ -93,6 +121,18 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
   const dominantShare = options.dominantShare ?? 0.6;
   const repeatCount = options.repeatCount ?? 5;
   const findings: Array<Finding & { group?: string }> = [];
+
+  /** " (in fn, file:line)" / "; mostly fn (file:line) 80%, ..." from profiler samples */
+  const culprit = (label: string, short: boolean): string => {
+    const all = options.hotspots?.[label] || [];
+    const total = all.reduce((sum, h) => sum + h.ms, 0);
+    const spots = all.filter(h => h.ms >= 0.05 * total);
+    if (spots.length === 0) return '';
+    const at = (h: BlockingHotspot) => `${h.functionName}${h.location ? ` (${h.location})` : ''}`;
+    if (short) return `, in ${at(spots[0])}`;
+    const shown = spots.slice(0, 3).map(h => `${at(h)} ${pct(h.ms, total)}`).join(', ');
+    return `; CPU time: ${shown}`;
+  };
 
   const blockers: Blocker[] = [];
   roots.forEach((root, i) => collectBlockers(root, i, blockingMs, blockers));
@@ -123,7 +163,8 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
         kind: 'blocked',
         root: rootLabel,
         ms,
-        message: `${rootLabel} waited ~${fmt(ms)} (${pct(ms, root.duration)} of its ${fmt(root.duration)}) while ${label}${where} blocked the event loop`,
+        call: label,
+        message: `${rootLabel} waited ~${fmt(ms)} (${pct(ms, root.duration)} of its ${fmt(root.duration)}) while ${label}${where} blocked the event loop${culprit(label, true)}`,
       });
     });
 
@@ -136,7 +177,8 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
         kind: 'blocking',
         root: rootLabel,
         ms,
-        message: `${b.label} ran ${fmt(ms)} of synchronous code, blocking everything else in the process for that long`,
+        call: b.label,
+        message: `${b.label} ran ${fmt(ms)} of synchronous code, blocking everything else in the process for that long${culprit(b.label, false)}`,
       });
     }
 
