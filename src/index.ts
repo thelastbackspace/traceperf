@@ -2,8 +2,12 @@
 import { OptimizedPerformanceMonitor, TrackingModes } from './core/optimized-performance-monitor';
 import { ITracePerfConfig, TrackOptions } from './types';
 
-// Create singleton instance
-const tracePerf = new OptimizedPerformanceMonitor();
+// Create singleton instance, shared by the CommonJS and ESM builds of this
+// major version (so `--require traceperf/auto` and `import tp from
+// 'traceperf'` see the same instance and the same call trees)
+const DEFAULT_KEY = Symbol.for('traceperf.default.v1');
+const shared = globalThis as any;
+const tracePerf: OptimizedPerformanceMonitor = shared[DEFAULT_KEY] || (shared[DEFAULT_KEY] = new OptimizedPerformanceMonitor());
 
 // Export the singleton instance as the default export
 export default tracePerf;
@@ -28,6 +32,7 @@ export * from './core';
 export * from './integrations';
 export * from './instrument';
 export * from './drivers';
+export * from './auto';
 export { OptimizedPerformanceMonitor };
 export { TrackingModes as TrackingMode };
 
