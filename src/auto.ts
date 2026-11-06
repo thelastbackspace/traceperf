@@ -11,7 +11,7 @@
  */
 import type { OptimizedPerformanceMonitor } from './core/optimized-performance-monitor';
 import { loadNodeBuiltin } from './core/env';
-import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, Uninstall } from './instrument';
+import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, Uninstall, wrapFastifyFactory } from './instrument';
 import { instrumentBetterSqlite3, instrumentMongo, instrumentMysql, instrumentMysql2, instrumentPg, instrumentPrisma, instrumentRedis } from './drivers';
 
 export type AutoTarget = 'server' | 'http' | 'fetch' | 'pg' | 'mysql2' | 'mongodb' | 'ioredis' | 'prisma' | 'better-sqlite3' | 'mysql';
@@ -92,6 +92,24 @@ export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoIns
   if (deps) {
     const appRequire = moduleApi.createRequire(path.join(deps.dir, 'package.json'));
     const load = (name: string) => appRequire(name);
+    // Fastify: label requests by route. The app gets the wrapped factory
+    // (require and import both read the module cache, filled here first).
+    if (deps.names.has('fastify') && !disabled.has('server')) {
+      try {
+        const file = appRequire.resolve('fastify');
+        const original = appRequire('fastify');
+        const cached = appRequire.cache && appRequire.cache[file];
+        const wrapped = wrapFastifyFactory(original);
+        if (cached && wrapped !== original) {
+          cached.exports = wrapped;
+          restores.push(() => {
+            if (cached.exports === wrapped) cached.exports = original;
+          });
+        }
+      } catch {
+        // labels stay URL-based
+      }
+    }
     if (deps.names.has('pg')) add('pg', () => instrumentPg(tp, load('pg')));
     if (deps.names.has('mysql2')) add('mysql2', () => instrumentMysql2(tp, load('mysql2')));
     if (deps.names.has('mysql')) add('mysql', () => instrumentMysql(tp, load('mysql')));

@@ -247,6 +247,40 @@ export interface HttpServerInstrumentOptions extends InstrumentOptions {
  * functions) nests under it, with no framework middleware. Responses with
  * status >= 500 and connections closed before a response count as failed.
  */
+/**
+ * Set on an incoming request (the raw http.IncomingMessage) to the matched
+ * route, e.g. "/api/articles/:slug", to label it by route instead of URL.
+ */
+export const ROUTE = Symbol.for('traceperf.route');
+
+/**
+ * Fastify (3, 4, 5): label requests by their route ("GET /api/articles/:slug").
+ * Wraps the fastify() factory so every instance gets an onRequest hook; returns
+ * the wrapper, to be used in place of the module's export.
+ */
+export function wrapFastifyFactory(fastify: any): any {
+  if (typeof fastify !== 'function' || fastify[PATCHED]) return fastify;
+  const wrapped = function (this: unknown, ...args: unknown[]) {
+    const app = fastify.apply(this, args);
+    try {
+      app.addHook('onRequest', (request: any, _reply: unknown, done: () => void) => {
+        const url = (request.routeOptions && request.routeOptions.url) || request.routerPath;
+        if (typeof url === 'string' && request.raw) request.raw[ROUTE] = url;
+        done();
+      });
+    } catch {
+      // never break the app
+    }
+    return app;
+  };
+  Object.assign(wrapped, fastify);
+  (wrapped as any)[PATCHED] = fastify;
+  // `import fastify from 'fastify'`, `require('fastify').fastify`, `.default`
+  (wrapped as any).fastify = wrapped;
+  (wrapped as any).default = wrapped;
+  return wrapped;
+}
+
 export function instrumentHttpServer(tp: OptimizedPerformanceMonitor, options: HttpServerInstrumentOptions = {}): Uninstall {
   const { errorStatus = 500, labelFor, ignore, ...trackOptions } = options;
   const restores: Uninstall[] = [];
@@ -269,8 +303,11 @@ export function instrumentHttpServer(tp: OptimizedPerformanceMonitor, options: H
       const end = (error?: unknown) => {
         if (ended) return;
         ended = true;
+        // A framework set the matched route (traceperf/auto does it for Fastify)
+        const marked = !labelFor ? req[ROUTE] : undefined;
+        if (typeof marked === 'string' && marked) span.setLabel(`${req.method || 'GET'} ${marked}`);
         // Express (4, 5, and Nest on it) knows the route: "/api/articles/:slug", not the slug itself
-        const route = !labelFor && req.route && typeof req.route.path === 'string' ? req.route.path : undefined;
+        const route = !labelFor && !marked && req.route && typeof req.route.path === 'string' ? req.route.path : undefined;
         if (route) {
           const base = typeof req.baseUrl === 'string' ? req.baseUrl : '';
           // router.route('/') under app.use('/v1/users') is "/v1/users", not "/v1/users/"
