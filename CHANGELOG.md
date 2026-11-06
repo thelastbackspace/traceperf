@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - Unreleased
+
+### Added
+- **Zero-code instrumentation:** `node --require traceperf/auto app.js` (or `--import` for ESM). Every incoming HTTP request is a top-level call with outgoing `http`/`fetch` calls and `pg`, `mysql2`, MongoDB/Mongoose and `ioredis` queries nested under it; database clients are instrumented only when the app's `package.json` lists them. Configured with `TRACEPERF_*` environment variables; prints statistics and explanations on exit. In code: `autoInstrument(tp)`.
+- `instrumentHttpServer(tp)`: incoming-request tracking for any Node `http`/`https` server, without framework middleware. `normalizePath()` collapses ids (`/users/42` becomes `/users/:id`).
+- **`explain(roots)` and `traceperf explain <file>`:** plain-English causes of slow calls. It reports calls delayed by blocking code elsewhere (naming the function that blocked), sequential awaits that could run in parallel, N+1 repeated calls, dominant children and errors.
+- `profileSlowCalls({ threshold, onProfile })`: V8 sampling-profiler hotspots (function, file:line, self time, plus idle and GC time) for every slow top-level call.
+- docs: production guide (`docs/production.md`, with measured costs) and comparison with other tools (`docs/comparison.md`).
+
+### Fixed
+- `instrumentMysql2`: `pool.query()` and `pool.promise().query()` threw "You have tried to call .then() ... on the result of query that is not a promise". Driver command objects are no longer treated as promises, and streaming queries now get their real duration instead of 0 ms.
+
+### Changed
+- The default instance (`require('traceperf')` / `import tp from 'traceperf'`) is now shared between the CommonJS and ESM builds, so calls tracked through either nest in the same trees.
+
+### Development
+- CI runs a MySQL 8.4 service for the driver tests. The packed-package check runs `node --require traceperf/auto` on every Node version from 14 to 24.
+
 ## [1.2.0] - Unreleased
 
 ### Added
