@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-06
+
 ### Added
 - **A PR check that isn't flaky:** `traceperf run --save-baseline perf-baseline.json` records how many calls of each kind every route makes per request; `--baseline perf-baseline.json` compares and exits 1 when a route makes more (`GET /orders: pg SELECT items 1 → 12 per request (an N+1?)`) or a new N+1 / error appears. Counts, not timings, so the result is the same on any machine.
 
