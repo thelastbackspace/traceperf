@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-06
+
 ### Added
 - **Prisma 4 and 5** are tracked too (their tracing hook only runs with a preview feature, so their client's request method is used); 6 and 7 keep using the hook.
 - **Express route labels:** requests are labelled by their route, `GET /api/articles/:slug`, instead of the URL (slugs and names no longer make one label per article or user).
