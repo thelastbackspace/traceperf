@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Prisma 4 and 5** are tracked too (their tracing hook only runs with a preview feature, so their client's request method is used); 6 and 7 keep using the hook.
+- **Express route labels:** requests are labelled by their route, `GET /api/articles/:slug`, instead of the URL (slugs and names no longer make one label per article or user).
+
+### Changed (from running it on the RealWorld "Conduit" API: Prisma 4, Express, Postgres)
+- A call that is far slower than it usually is gets "usually 5 ms (median), so the slow ones were waiting, not working: check the pool size, locks, GC…" instead of "check the query plan".
+- The rare-occurrence rule covers blocking too (warm-up in a router), except blocks of 100 ms or more.
+
+### Fixed
+- `traceperf run` could still leave a tsx app running: tsx's child ignores SIGTERM and `npx` exiting looked like the app exiting. `run` now waits for the whole process group to be gone, then SIGKILLs what is left (also when `run` itself is terminated).
+- CI: the browser job has a 15-minute limit (a hung Playwright download held a release for 20 minutes).
+
 ## [1.5.0] - 2026-11-06
 
 ### Added

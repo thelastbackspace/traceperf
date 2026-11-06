@@ -95,7 +95,16 @@ export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoIns
     if (deps.names.has('pg')) add('pg', () => instrumentPg(tp, load('pg')));
     if (deps.names.has('mysql2')) add('mysql2', () => instrumentMysql2(tp, load('mysql2')));
     if (deps.names.has('better-sqlite3')) add('better-sqlite3', () => instrumentBetterSqlite3(tp, load('better-sqlite3')));
-    if (deps.names.has('@prisma/client')) add('prisma', () => instrumentPrisma(tp));
+    if (deps.names.has('@prisma/client')) add('prisma', () => {
+      // Prisma 4/5 need the module; 6+ use the tracing hook (and Prisma 7's module may not load on its own)
+      let mod: unknown;
+      try {
+        mod = load('@prisma/client');
+      } catch {
+        mod = undefined;
+      }
+      return instrumentPrisma(tp, mod);
+    });
     if (deps.names.has('ioredis')) add('ioredis', () => instrumentRedis(tp, load('ioredis')));
     if (deps.names.has('mongodb')) add('mongodb', () => instrumentMongo(tp, load('mongodb')));
     else if (deps.names.has('mongoose')) {
