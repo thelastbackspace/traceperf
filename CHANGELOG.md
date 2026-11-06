@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-06
+
 ### Added
 - **Prisma without code changes (5, 6 and 7):** `traceperf/auto` and `traceperf run` track every Prisma Client call (`prisma.User.findMany`, raw queries as `prisma.raw.queryRaw`) through Prisma's own tracing hook, so it works with clients generated anywhere (Prisma 7's `prisma-client`), `$extends` and driver adapters, and keeps `@prisma/instrumentation` (OpenTelemetry) working. `instrumentPrisma(tp)` does it by hand; `prismaExtension` steps aside when it is active.
 - **better-sqlite3, and so Drizzle on SQLite:** `instrumentBetterSqlite3`; auto-detected. Drizzle on pg or mysql2 was already covered through those drivers.
