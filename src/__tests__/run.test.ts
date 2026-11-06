@@ -274,6 +274,24 @@ describe('statusFinding', () => {
   });
 });
 
+describe('cpuAdvice', () => {
+  const { cpuAdvice } = jest.requireActual('../run');
+  const spot = (functionName: string, location: string, ms: number) => ({ functionName, location, ms });
+  it('names what to do for the libraries using the CPU', () => {
+    const nest = [
+      spot('send → end', 'node_modules/express/lib/response.js:170', 26),
+      spot('DriverUtils.buildAlias', 'node_modules/typeorm/driver/DriverUtils.js:100', 17),
+      spot('escapeRegExp', 'node_modules/typeorm/query-builder/QueryBuilder.js:445', 10),
+      spot('render', 'src/view.js:3', 47),
+    ];
+    const advice = cpuAdvice(nest, 100);
+    expect(advice).toMatch(/^Express computes an ETag .*; TypeORM spends CPU .*; beyond that, run more processes/);
+    expect(advice.match(/TypeORM/g)).toHaveLength(1);
+    // Under 10% of the time: not worth a library-specific hint
+    expect(cpuAdvice([spot('x', 'node_modules/mongoose/lib/document.js:1', 5), spot('y', 'src/a.js:1', 95)], 100)).toMatch(/^cut the CPU each request needs/);
+  });
+});
+
 describe('busyFinding', () => {
   const { busyFinding } = jest.requireActual('../run');
   const load = { requests: 400, errors: 0, statuses: {}, durationMs: 4000, latency: {} };

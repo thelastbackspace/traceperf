@@ -267,6 +267,32 @@ export function loadCost(samples: LoadSample[], load: LoadResult, window: { star
   return { busy: active / (active + idle), perRequest: rate > 0 ? (activeRate * 1000) / rate : 0, rate };
 }
 
+/** Known CPU costs of popular libraries, matched against the hottest functions, and what to do */
+const CPU_ADVICE: Array<{ test: RegExp; advice: string }> = [
+  { test: /mongoose[\\/]lib[\\/](document|helpers|schema|types)/, advice: 'Mongoose is building full documents: add .lean() to read-only queries (plain objects, often several times less CPU) and .select() only the fields you send' },
+  { test: /typeorm[\\/](query-builder|driver[\\/]DriverUtils|metadata|entity-manager|persistence)/, advice: 'TypeORM spends CPU building queries and mapping rows to entities: on hot read paths load fewer relations and columns, or use getRawMany() / a raw query' },
+  { test: /sequelize[\\/]lib[\\/](model|instance|utils|dialects)/, advice: 'Sequelize is building model instances: use raw: true on hot read queries and limit attributes / includes' },
+  { test: /@prisma[\\/]client[\\/]runtime/, advice: 'Prisma\'s client is serialising queries and results: select only the fields you send and avoid deep include trees on hot paths' },
+  { test: /express[\\/]lib[\\/]response\.js|[\\/]etag[\\/]/, advice: "Express computes an ETag (a hash of the body) for every response: app.set('etag', false) if clients don't send conditional requests, and send smaller bodies" },
+  { test: /class-transformer|class-validator/, advice: 'class-transformer / class-validator run on every request (NestJS pipes and serialisers): skip them on hot read routes or validate less deeply' },
+  { test: /JSON\.stringify|fast-json-stringify|safe-stable-stringify/, advice: 'serialising large responses: paginate, send fewer fields, or use a schema-based serialiser (fast-json-stringify)' },
+  { test: /bcrypt|argon2|scrypt|pbkdf2/i, advice: 'password hashing is CPU by design: keep it to login routes, use the async API, and do not hash per request' },
+  { test: /winston|pino|morgan|debug[\\/]src|console/, advice: 'logging costs CPU per request: log less on hot routes, avoid pretty formatting in production, prefer pino' },
+  { test: /\(garbage collection\)/, advice: 'much of it is garbage collection: allocate less per request (smaller objects and arrays, no needless copies)' },
+];
+
+/** Advice for the hottest functions (those with at least 10% of the CPU time), then the general fix */
+export function cpuAdvice(spots: Array<{ functionName: string; location: string; ms: number }>, total: number): string {
+  const hints: string[] = [];
+  for (const h of spots) {
+    if (h.ms < 0.1 * total || hints.length >= 2) continue;
+    const rule = CPU_ADVICE.find(r => r.test.test(`${h.functionName} ${h.location}`));
+    if (rule && !hints.includes(rule.advice)) hints.push(rule.advice);
+  }
+  const general = 'run more processes (cluster or more instances) so requests stop waiting for each other';
+  return hints.length ? `${hints.join('; ')}; beyond that, ${general}` : `cut the CPU each request needs (start with the functions above), or ${general}`;
+}
+
 /**
  * The app was saturated *and* each request is expensive (5 ms of CPU or
  * more, a ceiling near 200/s per process): a load test saturates any one
@@ -283,10 +309,7 @@ export function busyFinding(samples: LoadSample[], load: LoadResult, window: { s
   const shown = spots.filter(h => h.ms >= 0.04 * total).slice(0, 4)
     .map(h => `${h.functionName}${h.location ? ` (${h.location})` : ''} ${Math.round((h.ms / Math.max(total, 1e-9)) * 100)}%`);
   const where = shown.length ? `; CPU time went to: ${shown.join(', ')}` : '';
-  const mongooseDocs = spots.slice(0, 5).some(h => /mongoose[\\/]lib[\\/](document|helpers|schema)/.test(h.location));
-  const fix = mongooseDocs
-    ? 'Mongoose is building full documents: add .lean() to read-only queries (plain objects, often several times less CPU) and select only the fields you send; beyond that, run more processes (cluster or more instances)'
-    : 'cut the CPU each request needs (start with the functions above), or run more processes (cluster or more instances) so requests stop waiting for each other';
+  const fix = cpuAdvice(spots, total);
   return {
     kind: 'busy',
     root: 'process',
