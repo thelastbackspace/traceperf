@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="847" height="364" viewBox="0 0 847 364" role="img" aria-label="traceperf run finds an N+1 query, then reports no issues after the fix">
+  <rect width="100%" height="100%" rx="8" fill="#0d1117"/>
+  <circle cx="20" cy="18" r="6" fill="#ff5f56"/><circle cx="40" cy="18" r="6" fill="#ffbd2e"/><circle cx="60" cy="18" r="6" fill="#27c93f"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+  <text x="20" y="58" fill="#e6edf3" xml:space="preserve"><tspan fill="#7ee787">$ npx traceperf run server.js --path /orders</tspan></text>
+  <text x="20" y="78" fill="#e6edf3" xml:space="preserve"><tspan fill="#8b949e">load: 365 requests in 2.1 s (170/s), 365× 200</tspan></text>
+  <text x="20" y="98" fill="#e6edf3" xml:space="preserve"></text>
+  <text x="20" y="118" fill="#e6edf3" xml:space="preserve">Why it was slow:</text>
+  <text x="20" y="138" fill="#e6edf3" xml:space="preserve">🔁 GET /orders called SELECT * FROM items WHERE order_id = ? 12 times (39 ms total); batching</text>
+  <text x="20" y="158" fill="#e6edf3" xml:space="preserve">   them into one call may help (<tspan fill="#f9a03f">N+1 pattern</tspan>) (seen 10 times, typical shown)</text>
+  <text x="20" y="178" fill="#e6edf3" xml:space="preserve"><tspan fill="#79c0ff">   fix:</tspan> load them in one query: WHERE id IN (...) (or = ANY($1) in Postgres), or your ORM's</text>
+  <text x="20" y="198" fill="#e6edf3" xml:space="preserve">   include/join; then match results in memory</text>
+  <text x="20" y="218" fill="#e6edf3" xml:space="preserve"></text>
+  <text x="20" y="238" fill="#e6edf3" xml:space="preserve"><tspan fill="#8b949e"># after replacing the per-order query with one WHERE order_id IN (...)</tspan></text>
+  <text x="20" y="258" fill="#e6edf3" xml:space="preserve"><tspan fill="#7ee787">$ npx traceperf run server.js --path /orders</tspan></text>
+  <text x="20" y="278" fill="#e6edf3" xml:space="preserve"><tspan fill="#8b949e">load: 1417 requests in 2.0 s (704/s), 1417× 200</tspan></text>
+  <text x="20" y="298" fill="#e6edf3" xml:space="preserve"></text>
+  <text x="20" y="318" fill="#e6edf3" xml:space="preserve">Why it was slow:</text>
+  <text x="20" y="338" fill="#e6edf3" xml:space="preserve"><tspan fill="#7ee787">No issues found</tspan>: nothing blocked, repeated, or ran sequentially in a way worth changing.</text>
+  </g>
+</svg>

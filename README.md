@@ -1,11 +1,21 @@
 # TracePerf
 
-**See where the time goes in your code.** It prints the call tree while you develop, keeps cheap per-function statistics in production, and exports to Perfetto or OpenTelemetry when you need more.
+**Find out why your Node.js API is slow, and stop pull requests that make it slower.** One command starts your app, sends it traffic, and names the cause: N+1 queries, awaits that could run in parallel, code blocking the event loop, a full connection pool, a missing index. No code changes.
 
 [![npm version](https://img.shields.io/npm/v/traceperf.svg)](https://www.npmjs.com/package/traceperf)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-![traceperf output: a request's call tree with self and sync time, a blocked-event-loop warning and a stats table](docs/assets/terminal.svg)
+![traceperf run finds an N+1 query with the fix to make, and reports no issues once it is fixed](docs/assets/demo.svg)
+
+```bash
+npx traceperf run server.js --path /orders --path /users/1
+```
+
+Then keep it fixed: [`--baseline`](#in-ci-fail-a-pr-that-adds-queries) fails a pull request when a route starts making more queries per request. It compares counts, not timings, so it gives the same answer on any CI machine, and [the GitHub Action](#in-ci-fail-a-pr-that-adds-queries) comments what changed.
+
+**How well it works:** `npm run eval` scores it on 24 small apps, 14 with a planted problem and 10 clean ones where the right answer is "no issues". CI requires every problem found and no false alarms. It has also been checked on public apps (Express, NestJS and Fastify, with Prisma, Mongoose, TypeORM and Drizzle). The thresholds are tuned on those apps, so if it gets your app wrong, [open an issue](https://github.com/thelastbackspace/traceperf/issues) with the output.
+
+Underneath is a tracking library you can also use directly:
 
 - **No code changes needed.** `node --require traceperf/auto app.js` tracks every request, outgoing call and database query, and tells you why slow requests were slow when the process exits.
 - **Explains, not just measures.** `traceperf explain` points out blocked event loops (and which function blocked it), awaits that could run in parallel and N+1 queries.
@@ -28,6 +38,8 @@ npm install traceperf
 ```
 
 ## Quick start
+
+![traceperf output: a request's call tree with self and sync time, a blocked-event-loop warning and a stats table](docs/assets/terminal.svg)
 
 ```javascript
 const { createTracePerf } = require('traceperf');
@@ -819,6 +831,14 @@ Use a sampling profiler (clinic.js, `--cpu-prof`) when you don't know where to l
 - `explain()` only sees tracked calls: it can say a request was delayed by blocking code, but names the function only if that function is tracked. `profileSlowCalls` finds untracked hot code.
 - In the default OpenTelemetry mode, spans are created when the top-level call finishes. Use `{ live: true }` if other instrumentation's spans should nest inside traceperf's.
 - `fetch` instrumentation times the request until the response headers arrive, not the time spent reading the body.
+- The missing-index check is Postgres only (MySQL's EXPLAIN is not read yet) and needs realistic data: on a small test database Postgres scans tables on purpose. Pool waits are tracked for `pg` and `mysql2` pools, not Prisma's or Mongoose's own pools.
+- `traceperf run`'s findings come from synthetic traffic to the paths you give, on one process. They tell you what those requests do, not what production traffic does; the evaluation apps are small and synthetic too.
+
+## Project focus
+
+New work goes into `traceperf run`, `explain`, `traceperf/auto`, the driver integrations and the CI baseline: finding why a Node API is slow and keeping it fixed. The rest (the browser build, Bun/Deno/Workers/Edge support, exporters, the decorator and logging APIs) is kept working and tested on every change, but gets no new features unless someone asks for one in an issue.
+
+Releases: at most one a week, batching what has landed, except fixes for regressions. The changelog lists every change.
 
 ## Examples
 
