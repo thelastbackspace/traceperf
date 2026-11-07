@@ -21,11 +21,15 @@ let virtualNow: number | undefined;
  * Returns a restore function. Not for code that awaits real timers.
  */
 export function useVirtualClock(): () => void {
+  // An own property shadows Performance.prototype.now (read-only for assignment on Node 18)
+  const hadOwn = Object.prototype.hasOwnProperty.call(performance, 'now');
+  const previous = Object.getOwnPropertyDescriptor(performance, 'now');
+  Object.defineProperty(performance, 'now', { value: () => virtualNow as number, configurable: true, writable: true });
   virtualNow = 1000;
-  const spy = jest.spyOn(performance, 'now').mockImplementation(() => virtualNow as number);
   return () => {
-    spy.mockRestore();
     virtualNow = undefined;
+    if (hadOwn && previous) Object.defineProperty(performance, 'now', previous);
+    else delete (performance as { now?: unknown }).now;
   };
 }
 

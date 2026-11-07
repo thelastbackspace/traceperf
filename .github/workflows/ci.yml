@@ -150,6 +150,17 @@ jobs:
         options: >-
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      # The legacy mysql driver cannot log in to MySQL 8 (caching_sha2_password);
+      # it is used with MariaDB / MySQL 5.7, so test it there
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: '1'
+          MARIADB_DATABASE: traceperf
+        ports: ['3307:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 30
       redis:
         image: redis:7
         ports: ['6379:6379']
@@ -159,6 +170,7 @@ jobs:
       TRACEPERF_MONGO_URL: mongodb://127.0.0.1:27017
       TRACEPERF_MYSQL_URL: mysql://root@127.0.0.1:3306/traceperf
       TRACEPERF_REDIS_URL: redis://127.0.0.1:6379
+      TRACEPERF_MARIADB_URL: mysql://root@127.0.0.1:3307/traceperf
       TRACEPERF_COMPAT_STRICT: '1'
     steps:
     - uses: actions/checkout@v4

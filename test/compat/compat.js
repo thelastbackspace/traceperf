@@ -18,6 +18,7 @@ const env = {
   mysql: process.env.TRACEPERF_MYSQL_URL,
   mongo: process.env.TRACEPERF_MONGO_URL,
   redis: process.env.TRACEPERF_REDIS_URL,
+  mariadb: process.env.TRACEPERF_MARIADB_URL,
 };
 
 /** Run body inside a root call and return the labels of its direct children */
@@ -82,8 +83,8 @@ const mysql2Check = pkg => async () => {
 
 const mysqlCheck = pkg => async () => {
   const mysql = require(pkg);
-  const conn = mysql.createConnection(env.mysql);
-  const pool = mysql.createPool(`${env.mysql}?connectionLimit=2`);
+  const conn = mysql.createConnection(env.mariadb);
+  const pool = mysql.createPool(`${env.mariadb}?connectionLimit=2`);
   try {
     const { labels, job } = await trace(tp => instrumentMysql(tp, mysql), async () => {
       await cb(done => conn.query('CREATE TEMPORARY TABLE users (id int, name text)', done));
@@ -199,7 +200,7 @@ const checks = [
   ['pg@8', 'pg', pgCheck('pg8')],
   ['mysql2@2', 'mysql', mysql2Check('mysql2-2')],
   ['mysql2@3', 'mysql', mysql2Check('mysql2-3')],
-  ['mysql@2', 'mysql', mysqlCheck('mysql-2')],
+  ['mysql@2', 'mariadb', mysqlCheck('mysql-2')],
   ['mongodb@3', 'mongo', mongoCheck('mongodb3', { callbacks: true })],
   ['mongodb@4', 'mongo', mongoCheck('mongodb4')],
   ['mongodb@5', 'mongo', mongoCheck('mongodb5')],
