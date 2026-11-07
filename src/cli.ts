@@ -15,6 +15,16 @@ import { renderHtmlReport } from './report-html';
 import { createWatcher, WatchOptions } from './watch';
 import { parseRunArgs, runApp, RUN_USAGE } from './run';
 
+/** --config FILE, or traceperf.config.json in the working directory when there is one */
+function readRunConfig(file?: string): string | undefined {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const fs = require('fs');
+  const target = require('path').resolve(file || 'traceperf.config.json');
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  if (!file && !fs.existsSync(target)) return undefined;
+  return fs.readFileSync(target, 'utf8');
+}
+
 export interface ReportOptions {
   top?: number;
   /** Return a self-contained HTML report instead of text */
@@ -381,7 +391,7 @@ export function main(argv: string[], io: {
     return runWatchOnce(rest, io);
   }
   if (command === 'run') {
-    const args = parseRunArgs(rest);
+    const args = parseRunArgs(rest, readRunConfig, process.env);
     io.err(typeof args === 'string' ? `traceperf: ${args}\n\n${RUN_USAGE}` : 'traceperf: run starts an app; use the traceperf command');
     return 1;
   }
@@ -559,7 +569,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const fs = require('fs');
   const argv = process.argv.slice(2);
   const watchArgs = argv[0] === 'watch' ? parseWatchArgs(argv.slice(1)) : undefined;
-  const runArgs = argv[0] === 'run' ? parseRunArgs(argv.slice(1)) : undefined;
+  const runArgs = argv[0] === 'run' ? parseRunArgs(argv.slice(1), readRunConfig, process.env) : undefined;
   if (watchArgs && typeof watchArgs !== 'string' && !watchArgs.once) {
     watchLive(watchArgs, fs);
   } else if (runArgs && typeof runArgs !== 'string') {

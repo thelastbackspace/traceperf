@@ -45,6 +45,8 @@ export interface RunArgs {
   profile: boolean;
   /** Ms to wait for the app to listen before giving up */
   startTimeoutMs: number;
+  /** From the config file: log in first and send the token with every request */
+  login?: RunLogin;
 }
 
 export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
@@ -67,6 +69,9 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --baseline f.json        compare with it; exit 1 if a route makes more calls
                                (e.g. an N+1) or a new problem appears. Counts, not
                                timings: deterministic, safe for CI
+      --config f.json  read these options from a file (default: traceperf.config.json
+                       if present; command-line options win). It can also log in
+                       first: "login": {"path": "/api/login", "body": {...}, "token": "user.token"}
       --no-profile     don't sample the CPU (blocking code is then named
                        only by its tracked call)`;
 
@@ -78,8 +83,113 @@ function parseDuration(value: string | undefined): number | undefined {
 }
 
 /** Parse `run` arguments; returns an error message on bad input */
-export function parseRunArgs(argv: string[]): RunArgs | string {
-  const args: RunArgs = {
+/** Log in before the traffic and send the token (or cookie) it returns with every request */
+export interface RunLogin {
+  path: string;
+  /** Default POST */
+  method?: string;
+  /** JSON request body; "${NAME}" in strings is replaced by the environment variable */
+  body?: unknown;
+  headers?: Record<string, string>;
+  /** Dotted path of the token in the JSON response, e.g. "user.token"; without it the Set-Cookie header is used */
+  token?: string;
+  /** Header to send it in (default authorization) */
+  header?: string;
+  /** Text before the token (default "Bearer ") */
+  prefix?: string;
+}
+
+/** traceperf.config.json: the same settings as the command-line options */
+export interface RunConfig {
+  app?: string | string[];
+  paths?: string[];
+  concurrency?: number;
+  duration?: string | number;
+  requests?: number;
+  method?: string;
+  headers?: Record<string, string>;
+  warmup?: number;
+  probe?: number;
+  port?: number;
+  baseline?: string;
+  saveBaseline?: string;
+  html?: string;
+  login?: RunLogin;
+}
+
+/** Replace "${NAME}" with process environment values, in every string of a JSON value */
+export function interpolateEnv<T>(value: T, env: Record<string, string | undefined>): T {
+  if (typeof value === 'string') return value.replace(/\$\{(\w+)\}/g, (_, name) => env[name] ?? '') as unknown as T;
+  if (Array.isArray(value)) return value.map(v => interpolateEnv(v, env)) as unknown as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, interpolateEnv(v, env)])) as T;
+  }
+  return value;
+}
+
+function configArgv(c: RunConfig): string[] {
+  const out: string[] = [];
+  const opt = (flag: string, v: unknown) => { if (v !== undefined) out.push(flag, String(v)); };
+  for (const p of c.paths || []) out.push('--path', p);
+  opt('-c', c.concurrency);
+  opt('-d', typeof c.duration === 'number' ? `${c.duration}ms` : c.duration);
+  opt('-n', c.requests);
+  opt('--method', c.method);
+  for (const [k, v] of Object.entries(c.headers || {})) out.push('-H', `${k}: ${v}`);
+  opt('--warmup', c.warmup);
+  opt('--probe', c.probe);
+  opt('--port', c.port);
+  opt('--baseline', c.baseline);
+  opt('--save-baseline', c.saveBaseline);
+  opt('--html', c.html);
+  return out;
+}
+
+/**
+ * Read run options; `readConfig(file?)` returns the text of --config FILE, or
+ * of traceperf.config.json when there is one (undefined: none). Command-line
+ * options win over the file; --path on the command line replaces its paths.
+ */
+export function parseRunArgs(argv: string[], readConfig?: (file?: string) => string | undefined, env: Record<string, string | undefined> = {}): RunArgs | string {
+  const at = argv.indexOf('--config');
+  const dashdash = argv.indexOf('--');
+  let configFile: string | undefined;
+  if (at >= 0 && (dashdash < 0 || at < dashdash)) {
+    configFile = argv[at + 1];
+    if (!configFile) return '--config expects a file';
+    argv = [...argv.slice(0, at), ...argv.slice(at + 2)];
+  }
+  let config: RunConfig | undefined;
+  if (readConfig) {
+    let text: string | undefined;
+    try {
+      text = readConfig(configFile);
+    } catch (e) {
+      return `could not read ${configFile}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    if (configFile && text === undefined) return `could not read ${configFile}`;
+    if (text !== undefined) {
+      try {
+        config = interpolateEnv(JSON.parse(text) as RunConfig, env);
+      } catch (e) {
+        return `${configFile || 'traceperf.config.json'} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+  }
+  if (!config) return parseArgv(argv);
+  const base = parseArgv([...configArgv(config), '--', ...(typeof config.app === 'string' ? [config.app] : config.app || [])], true);
+  if (typeof base === 'string') return `in the config file: ${base}`;
+  base.login = config.login;
+  const cli = parseArgv(argv, true, { ...base, paths: [], command: [] });
+  if (typeof cli === 'string') return cli;
+  if (!cli.paths.length) cli.paths = base.paths;
+  if (!cli.command.length) cli.command = base.command;
+  if (!cli.command.length) return 'run expects an app, e.g. traceperf run server.js (or "app" in the config file)';
+  return cli;
+}
+
+function parseArgv(argv: string[], partial = false, start?: RunArgs): RunArgs | string {
+  const args: RunArgs = start ? { ...start } : {
     command: [], paths: [], concurrency: 10, durationMs: 5000, host: '127.0.0.1',
     method: 'GET', warmup: 3, probe: 10, json: false, profile: true, max: 10, startTimeoutMs: 15000,
   };
@@ -158,8 +268,48 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
         args.command.push(a);
     }
   }
-  if (!args.command.length) return 'run expects an app, e.g. traceperf run server.js';
+  if (!args.command.length && !partial) return 'run expects an app, e.g. traceperf run server.js';
   return args;
+}
+
+/** Read a dotted path ("user.token", "data.0.jwt") from a JSON value */
+function dig(value: unknown, dotted: string): unknown {
+  return dotted.split('.').reduce<unknown>((v, key) => (v !== null && typeof v === 'object' ? (v as Record<string, unknown>)[key] : undefined), value);
+}
+
+/** Run the login request; returns the headers to send from now on, or an error message */
+export function login(http: any, args: RunArgs, port: number, spec: RunLogin): Promise<Record<string, string> | string> {
+  const body = spec.body === undefined ? undefined : JSON.stringify(spec.body);
+  return new Promise(resolve => {
+    const req = http.request({
+      host: args.host, port, path: spec.path, method: (spec.method || 'POST').toUpperCase(),
+      headers: { ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...(spec.headers || {}) },
+    }, (res: any) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk: string) => { text += chunk; });
+      res.on('end', () => {
+        const where = `login ${spec.method || 'POST'} ${spec.path}`;
+        if (res.statusCode >= 400) return resolve(`${where} answered ${res.statusCode}: ${text.slice(0, 200)}`);
+        if (!spec.token) {
+          const cookies: string[] = [].concat(res.headers['set-cookie'] || []);
+          if (!cookies.length) return resolve(`${where} set no cookie; give "token": the path of the token in its JSON response`);
+          return resolve({ cookie: cookies.map(c => c.split(';')[0]).join('; ') });
+        }
+        let token: unknown;
+        try {
+          token = dig(JSON.parse(text), spec.token);
+        } catch {
+          return resolve(`${where} did not answer JSON: ${text.slice(0, 200)}`);
+        }
+        if (typeof token !== 'string' && typeof token !== 'number') return resolve(`${where}: no "${spec.token}" in the response: ${text.slice(0, 200)}`);
+        resolve({ [(spec.header || 'authorization').toLowerCase()]: `${spec.prefix ?? 'Bearer '}${token}` });
+      });
+    });
+    req.on('error', (e: Error) => resolve(`login failed: ${e.message}`));
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
 export interface LoadResult {
@@ -576,6 +726,17 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
         return 1;
       }
       deps.err(`traceperf: sending ${args.requests ? `${args.requests} requests` : `${args.durationMs / 1000} s of traffic`} to ${args.paths.join(', ')} on port ${port}, ${args.concurrency} at a time`);
+      if (args.login) {
+        const got = await login(deps.http, args, port, args.login);
+        if (typeof got === 'string') {
+          deps.err(`traceperf: ${got}`);
+          await stopAndWait();
+          return 1;
+        }
+        // Later headers from -H win over the login's
+        args = { ...args, headers: { ...got, ...(args.headers || {}) } };
+        deps.err(`traceperf: logged in (${Object.keys(got).join(', ')} set)`);
+      }
       if (args.warmup > 0) {
         await sendLoad(deps.http, { ...args, concurrency: 1, requests: args.warmup * args.paths.length }, port);
         skipBytes = await sizeNow();

@@ -363,3 +363,52 @@ describe('queueFindings', () => {
     expect(busy.fix).toMatch(/throughput limit/);
   });
 });
+
+describe('config file and login', () => {
+  const read = (text: string) => (file?: string) => (file === 'missing.json' ? undefined : text);
+
+  it('reads options from the file; the command line wins and its --path replaces the file paths', () => {
+    const config = JSON.stringify({ app: 'server.js', paths: ['/a', '/b'], concurrency: 4, duration: '2s', headers: { 'X-Key': '${KEY}' }, probe: 0 });
+    const fromFile = parseRunArgs([], read(config), { KEY: 'secret' }) as RunArgs;
+    expect(fromFile).toMatchObject({ command: ['server.js'], paths: ['/a', '/b'], concurrency: 4, durationMs: 2000, headers: { 'x-key': 'secret' }, probe: 0 });
+    const overridden = parseRunArgs(['-c', '8', '--path', '/c'], read(config), {}) as RunArgs;
+    expect(overridden).toMatchObject({ command: ['server.js'], paths: ['/c'], concurrency: 8 });
+    expect((parseRunArgs(['other.js'], read(config), {}) as RunArgs).command).toEqual(['other.js']);
+    expect(parseRunArgs([], read('{'), {})).toMatch(/not valid JSON/);
+    expect(parseRunArgs(['--config', 'missing.json', 'x.js'], read(''), {})).toMatch(/could not read missing.json/);
+    expect(parseRunArgs([], read('{}'), {})).toMatch(/"app" in the config file/);
+  });
+
+  it('logs in first and sends the token from the JSON response with every request', async () => {
+    const seen: Array<string | undefined> = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        if (req.url === '/login') {
+          const { password } = JSON.parse(body);
+          if (password !== 'pw') { res.statusCode = 401; return res.end('bad password'); }
+          return res.end(JSON.stringify({ user: { token: 'abc' } }));
+        }
+        if (req.url === '/cookie-login') { res.setHeader('set-cookie', ['sid=42; HttpOnly', 'theme=dark']); return res.end('{}'); }
+        seen.push(req.headers.authorization || req.headers.cookie);
+        res.end('ok');
+      });
+    });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const args = parseRunArgs(['x.js']) as RunArgs;
+      const { login } = await import('../run');
+      expect(await login(http, args, port, { path: '/login', body: { password: 'pw' }, token: 'user.token' })).toEqual({ authorization: 'Bearer abc' });
+      expect(await login(http, args, port, { path: '/login', body: { password: 'pw' }, token: 'user.token', header: 'X-Token', prefix: '' })).toEqual({ 'x-token': 'abc' });
+      expect(await login(http, args, port, { path: '/cookie-login' })).toEqual({ cookie: 'sid=42; theme=dark' });
+      expect(await login(http, args, port, { path: '/login', body: { password: 'no' }, token: 'user.token' })).toMatch(/answered 401: bad password/);
+      expect(await login(http, args, port, { path: '/login', body: { password: 'pw' }, token: 'missing.path' })).toMatch(/no "missing.path"/);
+      await sendLoad(http, { ...args, paths: ['/x'], requests: 2, concurrency: 1, headers: { authorization: 'Bearer abc' } }, port);
+      expect(seen).toEqual(['Bearer abc', 'Bearer abc']);
+    } finally {
+      server.close();
+    }
+  });
+});
