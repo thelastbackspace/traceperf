@@ -24,7 +24,7 @@ export interface ExplainNode {
 }
 
 /** 'busy' (the process was saturated) comes from traceperf run, which measures the whole process */
-export type FindingKind = 'blocked' | 'blocking' | 'sequential' | 'repeated' | 'dominant' | 'error' | 'busy';
+export type FindingKind = 'blocked' | 'blocking' | 'sequential' | 'repeated' | 'dominant' | 'error' | 'busy' | 'pool' | 'index';
 
 export interface Finding {
   kind: FindingKind;
@@ -223,7 +223,8 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     }
 
     walk(root, node => {
-      const kids = node.children;
+      // A wait for a pooled connection is reported as such (5b), not as a call to reorder or batch
+      const kids = node.children.filter(k => !POOL_WAIT.test(k.label));
       if (kids.length === 0) return;
       // What a library does inside one call (Prisma's include = two queries) is not the app's to reorder
       if (LIBRARY_CALL.test(node.label)) return;
@@ -288,8 +289,26 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
       });
     });
 
+    // 5b. Waited for a free pooled connection (the drivers track it only when the pool was full)
+    const waits = new Map<string, number>();
+    walk(root, n => {
+      const m = POOL_WAIT.exec(n.label);
+      if (m) waits.set(m[1], (waits.get(m[1]) || 0) + n.duration);
+    });
+    waits.forEach((ms, driver) => {
+      if (ms < minMs || ms < 0.2 * root.duration) return;
+      findings.push({
+        kind: 'pool',
+        root: rootLabel,
+        ms,
+        group: `pool ${driver}`,
+        message: `${rootLabel} waited ${fmt(ms)} for a free ${driver} connection (${pct(ms, root.duration)} of the request): every connection in the pool was in use`,
+      });
+    });
+
     // 5. One child dominates the top-level call
     for (const k of root.children) {
+      if (POOL_WAIT.test(k.label)) continue;
       // A request that makes one call is always "mostly" that call: only say so when it is slow
       if (root.children.length === 1 && k.duration < 100) continue;
       // A call under dominantMinMs is not worth chasing, whatever its share
@@ -395,7 +414,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     if (g.ms < minMs || rare) grouped.delete(key);
     else if (g.kind !== 'blocking' && g.roots.size === 1 && total > g.times) share.set(g, `in ${g.times} of ${total} ${g.root}`);
   }
-  const order: Record<FindingKind, number> = { error: 0, busy: 1, blocked: 1, blocking: 2, repeated: 3, sequential: 4, dominant: 5 };
+  const order: Record<FindingKind, number> = { error: 0, busy: 1, blocked: 1, pool: 1, blocking: 2, index: 3, repeated: 3, sequential: 4, dominant: 5 };
   return [...grouped.values()]
     // Failures first: they matter more than timing; then by total time involved
     .sort((a, b) => Number(b.kind === 'error') - Number(a.kind === 'error') || b.ms * b.times - a.ms * a.times || order[a.kind] - order[b.kind])
@@ -430,6 +449,7 @@ const SYNC_FIX: Array<[RegExp, string]> = [
   [/garbage collection/, 'it allocates a lot: reuse objects/buffers and avoid building large temporary arrays or strings'],
 ];
 /** Labels traceperf gives driver / ORM calls */
+const POOL_WAIT = /^(\w+) pool wait$/;
 const LIBRARY_CALL = /^(prisma\.|(pg|mysql|sqlite|mongo|redis|aws) )/;
 const SQL = /\b(select|insert|update|delete|pg|mysql|postgres|sql|query|prisma|knex|sequelize|typeorm|drizzle)\b/i;
 
@@ -461,6 +481,11 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, me
       if (!names.every(n => /^[\w.$]+$/.test(n))) return `if they don't depend on each other, start them together with Promise.all instead of awaiting each in turn`;
       return `if they don't depend on each other, start them together: await Promise.all([${names.map(n => `${n}()`).join(', ')}${labels.length > 3 ? ', ...' : ''}])`;
     }
+    case 'pool': {
+      const driver = /free (\w+) connection/.exec(f.message)?.[1];
+      const setting = driver === 'mysql' ? 'connectionLimit (mysql2 default 10)' : driver === 'pg' ? 'max (pg default 10)' : 'the pool size';
+      return `requests queued for a connection: raise ${setting} if the database can take more connections, or hold each one for less time (no other awaits inside a transaction; release clients you check out yourself). Compare with --concurrency below the pool size`;
+    }
     case 'repeated': {
       const label = labels[0] || '';
       if (/^prisma\./.test(label)) return `load them in one call: include the relation in the parent query (include: { ... }), or findMany({ where: { id: { in: ids } } }) and match results in memory`;
@@ -487,7 +512,7 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, me
 }
 
 const ICON: Record<FindingKind, string> = {
-  error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●', busy: '🔥',
+  error: '✖', blocked: '⏳', blocking: '🔥', repeated: '🔁', sequential: '⇉', dominant: '●', busy: '🔥', pool: '⏳', index: '🔍',
 };
 
 /** Render findings as text, one per line (and the fix, if any, below it) */

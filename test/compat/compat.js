@@ -40,6 +40,29 @@ async function trace(instrument, body) {
 const cb = fn => new Promise((resolve, reject) => fn((err, res) => (err ? reject(err) : resolve(res))));
 const db = () => `traceperf_compat_${process.pid}`;
 
+
+/** Pool of 1, 4 requests at once: each request's query must stay in its own tree, with the wait tracked */
+async function contention(instrument, query, waitLabel) {
+  const roots = [];
+  const tp = createTracePerf({ silent: true, trackMemory: false, onComplete: r => roots.push(r) });
+  const uninstall = instrument(tp);
+  try {
+    await Promise.all([1, 2, 3, 4].map(i => tp.track(async () => {
+      await query(i);
+      await query(i);
+    }, { label: `req${i}` })));
+  } finally {
+    uninstall();
+  }
+  const requests = roots.filter(r => r.label.startsWith('req'));
+  assert.strictEqual(requests.length, 4, `4 request trees, got ${roots.map(r => r.label).join(', ')}`);
+  for (const r of requests) {
+    const queries = r.children.filter(c => c.label !== waitLabel);
+    assert.strictEqual(queries.length, 2, `${r.label} has its 2 queries: ${r.children.map(c => c.label).join(', ')}`);
+  }
+  assert.ok(requests.some(r => r.children.some(c => c.label === waitLabel)), `some request waited (${waitLabel})`);
+}
+
 const pgCheck = pkg => async () => {
   const pg = require(pkg);
   const client = new pg.Client({ connectionString: env.pg });
@@ -56,6 +79,12 @@ const pgCheck = pkg => async () => {
     });
     assert.deepStrictEqual(labels, ['pg CREATE users', 'pg INSERT users', 'pg SELECT users', 'pg SELECT pg_class', 'pg SELECT missing_table']);
     assert.ok(job.children[4].error, 'failed query is marked as an error');
+    const one = new pg.Pool({ connectionString: env.pg, max: 1 });
+    try {
+      await contention(tp => instrumentPg(tp, pg), () => one.query('SELECT pg_sleep(0.01)'), 'pg pool wait');
+    } finally {
+      await one.end();
+    }
   } finally {
     await client.end();
     await pool.end();
@@ -77,6 +106,14 @@ const mysql2Check = pkg => async () => {
     });
     assert.deepStrictEqual(labels, ['mysql CREATE users', 'mysql INSERT users', 'mysql SELECT users', 'mysql SELECT DUAL', 'mysql SELECT missing_table']);
     assert.ok(job.children[4].error, 'failed query is marked as an error');
+    const one = mysql.createPool({ uri: env.mysql, connectionLimit: 1 });
+    try {
+      await contention(tp => instrumentMysql2(tp, mysql), () => one.promise().query('SELECT SLEEP(0.01)'), 'mysql pool wait');
+      // callback API too
+      await contention(tp => instrumentMysql2(tp, mysql), () => cb(done => one.query('SELECT SLEEP(0.01)', done)), 'mysql pool wait');
+    } finally {
+      await one.promise().end();
+    }
   } finally {
     conn.end();
     await pool.promise().end();

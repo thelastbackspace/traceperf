@@ -8,6 +8,7 @@
 import type { OptimizedPerformanceMonitor, Span } from './core/optimized-performance-monitor';
 import type { TrackOptions } from './types/options';
 import type { Uninstall } from './instrument';
+import { loadNodeBuiltin } from './core/env';
 
 const PATCHED = Symbol.for('traceperf.instrumented');
 
@@ -44,10 +45,12 @@ function trackCall(
   const cb = callbackIndex >= 0 ? args[callbackIndex] : undefined;
   if (typeof cb === 'function') {
     const wrappedArgs = args.slice();
-    wrappedArgs[callbackIndex] = function (this: unknown, error: unknown, ...rest: unknown[]) {
+    // Bound: drivers call it from whatever request's I/O completed it (queued
+    // queries on one connection, pools), and work done in it belongs to the caller
+    wrappedArgs[callbackIndex] = bindContext(function (this: unknown, error: unknown, ...rest: unknown[]) {
       end(error || undefined);
       return (cb as Function).call(this, error, ...rest);
-    };
+    });
     try {
       return span.run(() => original.apply(thisArg, wrappedArgs));
     } catch (error) {
@@ -83,6 +86,66 @@ function trackCall(
   }
   end();
   return result;
+}
+
+/** A SQL statement as the app sent it, with a way to run another statement on the same database */
+export interface ObservedSql {
+  driver: 'pg';
+  text: string;
+  values?: unknown[];
+  /** Runs a statement on the pool the app used (or the client, when it has no pool) */
+  run(text: string, values?: unknown[]): Promise<any[]>;
+}
+
+const OWN_SQL = '/* traceperf */ ';
+let sqlObserver: ((q: ObservedSql) => void) | undefined;
+let lastPgPool: any;
+
+/** @internal traceperf run's index check: sees each SQL statement (one observer at a time) */
+export function observeSql(observer: ((q: ObservedSql) => void) | undefined): void {
+  sqlObserver = observer;
+}
+
+const AsyncResource: any = (loadNodeBuiltin('async_hooks') || {}).AsyncResource;
+
+/**
+ * Pools keep a queue of callbacks and call them when another request releases
+ * a connection, i.e. in that other request's async context: without binding,
+ * the queries made in the callback were attributed to the wrong request (or to
+ * none) whenever the pool was full.
+ */
+function bindContext<F>(fn: F): F {
+  return typeof fn === 'function' && AsyncResource && typeof AsyncResource.bind === 'function' ? AsyncResource.bind(fn) : fn;
+}
+
+/** Bind a trailing callback argument to the caller's async context */
+function bindLastCallback(args: unknown[]): unknown[] {
+  const last = args.length - 1;
+  if (last < 0 || typeof args[last] !== 'function') return args;
+  const copy = args.slice();
+  copy[last] = bindContext(copy[last]);
+  return copy;
+}
+
+/**
+ * Pool.connect / getConnection: callbacks keep the caller's context, and when
+ * every connection is in use the wait is tracked as "<driver> pool wait"
+ * (traceperf run reports requests that queued for a connection).
+ */
+function patchPoolAcquire(
+  tp: OptimizedPerformanceMonitor, proto: any, method: string, label: string, isFull: (pool: any) => boolean, options: DriverOptions, restores: Uninstall[]
+): void {
+  patchMethod(proto, method, original => function (this: any, ...args: unknown[]) {
+    const bound = bindLastCallback(args);
+    let full = false;
+    try {
+      full = isFull(this);
+    } catch {
+      full = false;
+    }
+    if (!full) return original.apply(this, bound);
+    return trackCall(tp, label, options, this, original, bound, typeof bound[bound.length - 1] === 'function' ? bound.length - 1 : -1);
+  }, restores);
 }
 
 function patchMethod(target: any, name: string, makePatched: (original: Function) => Function, restores: Uninstall[]): void {
@@ -124,9 +187,35 @@ export function sqlLabel(sql: unknown): string {
  */
 export function instrumentPg(tp: OptimizedPerformanceMonitor, pg: any, options: DriverOptions = {}): Uninstall {
   const restores: Uninstall[] = [];
-  patchMethod(pg && pg.Client && pg.Client.prototype, 'query', original => function (this: unknown, ...args: unknown[]) {
+  patchMethod(pg && pg.Client && pg.Client.prototype, 'query', original => function (this: any, ...args: unknown[]) {
+    // traceperf's own statements (the index check) are not the app's
+    if (typeof args[0] === 'string' && args[0].startsWith(OWN_SQL)) return original.apply(this, args);
+    if (sqlObserver) {
+      const first = args[0] as any;
+      const text = typeof first === 'string' ? first : first && typeof first.text === 'string' ? first.text : undefined;
+      if (text !== undefined) {
+        const values = Array.isArray(args[1]) ? args[1] : first && Array.isArray(first.values) ? first.values : undefined;
+        const client = this;
+        const pool = lastPgPool;
+        try {
+          sqlObserver({
+            driver: 'pg', text, values,
+            run: (sql, vals) => (pool && !pool.ending && !pool.ended ? pool.query(OWN_SQL + sql, vals) : client.query(OWN_SQL + sql, vals)).then((r: any) => r.rows),
+          });
+        } catch {
+          // observing must never break the query
+        }
+      }
+    }
     return trackCall(tp, `pg ${sqlLabel(args[0])}`, options, this, original, args);
   }, restores);
+  patchMethod(pg && pg.Pool && pg.Pool.prototype, 'query', original => function (this: unknown, ...args: unknown[]) {
+    lastPgPool = this;
+    return original.apply(this, args);
+  }, restores);
+  // pg-pool: totalCount / idleCount / options.max
+  patchPoolAcquire(tp, pg && pg.Pool && pg.Pool.prototype, 'connect', 'pg pool wait',
+    pool => pool.totalCount >= pool.options.max && pool.idleCount === 0, options, restores);
   return () => restores.forEach(r => r());
 }
 
@@ -143,6 +232,9 @@ export function instrumentMysql2(tp: OptimizedPerformanceMonitor, mysql2: any, o
       return trackCall(tp, `mysql ${sqlLabel(args[0])}`, options, this, original, args);
     }, restores);
   }
+  // pool.query and pool.execute get a connection through getConnection(cb)
+  patchPoolAcquire(tp, mysql2 && mysql2.Pool && mysql2.Pool.prototype, 'getConnection', 'mysql pool wait',
+    pool => pool._allConnections.length >= pool.config.connectionLimit && pool._freeConnections.length === 0, options, restores);
   return () => restores.forEach(r => r());
 }
 
@@ -179,6 +271,10 @@ export function instrumentMysql(tp: OptimizedPerformanceMonitor, mysql: any, opt
     const result: any = trackCall(tp, `mysql ${sqlLabel(args[0])}`, options, this, original, args);
     if (result && typeof result === 'object') result[POOLED] = true;
     return result;
+  }, restores);
+  // pool.getConnection(cb): the callback runs when another request releases a connection
+  patchMethod(poolProto, 'getConnection', original => function (this: unknown, ...args: unknown[]) {
+    return original.apply(this, bindLastCallback(args));
   }, restores);
   return () => restores.forEach(r => r());
 }

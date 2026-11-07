@@ -9,6 +9,7 @@
  * Node-only; builtins are passed in so this module stays free of require().
  */
 import { explain, formatFindings, Finding } from './core/explain';
+import { indexStatement, SeqScan } from './core/sql-plan';
 import { blockingHotspots, BlockingProfileEntry } from './core/cpu-profile';
 import { normalizePath } from './instrument';
 
@@ -47,6 +48,10 @@ export interface RunArgs {
   profile: boolean;
   /** Ms to wait for the app to listen before giving up */
   startTimeoutMs: number;
+  /** EXPLAIN the app's SELECTs after the load and report full scans an index would avoid (Postgres; default on) */
+  explain: boolean;
+  /** Tables smaller than this are fine to scan (default 10000 rows) */
+  indexMinRows: number;
   /** From the config file: log in first and send the token with every request */
   login?: RunLogin;
 }
@@ -75,6 +80,8 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --config f.json  read these options from a file (default: traceperf.config.json
                        if present; command-line options win). It can also log in
                        first: "login": {"path": "/api/login", "body": {...}, "token": "user.token"}
+      --no-explain     don't EXPLAIN the app's Postgres SELECTs after the load
+                       (it plans them, never runs them, to find missing indexes)
       --no-profile     don't sample the CPU (blocking code is then named
                        only by its tracked call)`;
 
@@ -194,7 +201,7 @@ export function parseRunArgs(argv: string[], readConfig?: (file?: string) => str
 function parseArgv(argv: string[], partial = false, start?: RunArgs): RunArgs | string {
   const args: RunArgs = start ? { ...start } : {
     command: [], paths: [], concurrency: 10, durationMs: 5000, host: '127.0.0.1',
-    method: 'GET', warmup: 3, probe: 10, json: false, profile: true, max: 10, startTimeoutMs: 15000,
+    method: 'GET', warmup: 3, probe: 10, json: false, profile: true, max: 10, startTimeoutMs: 15000, explain: true, indexMinRows: 10000,
   };
   const num = (name: string, v: string | undefined): number | string => {
     const n = Number(v);
@@ -259,6 +266,7 @@ function parseArgv(argv: string[], partial = false, start?: RunArgs): RunArgs | 
       case '--save-baseline': if (!(args.saveBaseline = argv[++i])) return '--save-baseline expects a file'; break;
       case '--baseline': if (!(args.baseline = argv[++i])) return '--baseline expects a file'; break;
       case '--no-profile': args.profile = false; break;
+      case '--no-explain': args.explain = false; break;
       case '--probe': {
         const n = Number(argv[++i]);
         if (!(n >= 0)) return '--probe expects a number';
@@ -631,6 +639,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   const readyFile = path.join(dir, 'port');
   const profileFile = path.join(dir, 'profiles.jsonl');
   const loadFile = path.join(dir, 'load.jsonl');
+  const explainFile = path.join(dir, 'explain.jsonl');
   let loadWindow: { start: number; end: number } | undefined;
   if (args.output) fs.writeFileSync(output, '');
   const env: Record<string, string> = {
@@ -641,6 +650,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     TRACEPERF_READY_FILE: readyFile,
     ...(args.profile ? { TRACEPERF_PROFILE_BLOCKING: '1', TRACEPERF_PROFILE_OUTPUT: profileFile } : {}),
     TRACEPERF_LOAD_OUTPUT: loadFile,
+    ...(args.explain ? { TRACEPERF_EXPLAIN_OUTPUT: explainFile } : {}),
   } as Record<string, string>;
   const [cmd, ...cmdArgs] = args.command;
   const quoted = JSON.stringify(deps.registerPath);
@@ -754,8 +764,13 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       const loadStart = Date.now();
       load = await sendLoad(deps.http, args, port);
       loadWindow = { start: loadStart, end: Date.now() };
-      // One more load sample covers the last second
+      // One more load sample covers the last second; meanwhile the app EXPLAINs its queries
+      if (args.explain) fs.writeFileSync(`${explainFile}.request`, '1');
       await new Promise(r => setTimeout(r, 1100));
+      if (args.explain) {
+        const until = Date.now() + 5000;
+        while (!fs.existsSync(`${explainFile}.done`) && Date.now() < until && !exited) await new Promise(r => setTimeout(r, 100));
+      }
       await stopAndWait();
     } else {
       deps.err('traceperf: app running; use it, then press Ctrl-C for the report');
@@ -839,6 +854,15 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
       }
       queued = [];
     }
+    if (args.explain) {
+      let plans: ExplainedQuery[] = [];
+      try {
+        plans = fs.readFileSync(explainFile, 'utf8').split('\n').filter((l: string) => l.trim()).map((l: string) => JSON.parse(l));
+      } catch {
+        plans = [];
+      }
+      summary.findings.push(...indexFindings(plans, args.indexMinRows));
+    }
     // After blocking findings, which explain them
     const after = summary.findings.filter(f => f.kind === 'error' || f.kind === 'blocking').length;
     summary.findings.splice(after, 0, ...queued);
@@ -892,6 +916,42 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   // Interactive runs end with Ctrl-C; that is success. A crash before any traffic is not.
   if (baselineError || (baselineReport && baselineReport.regressions.length)) return 1;
   return !summary.trees && exitCode ? 1 : 0;
+}
+
+/** One EXPLAINed statement from the app (TRACEPERF_EXPLAIN_OUTPUT) */
+export interface ExplainedQuery {
+  driver: string;
+  text: string;
+  count: number;
+  scans: Array<SeqScan & { tableRows: number }>;
+}
+
+/**
+ * Scans of whole tables that an index would avoid: a sequential scan of a
+ * table with at least `minRows` rows (planner estimate) whose filter keeps
+ * under 10% of them. Small tables are scanned on purpose, so test databases
+ * with little data rarely show one: run against realistic data.
+ */
+export function indexFindings(plans: ExplainedQuery[], minRows = 10000): Finding[] {
+  const out: Finding[] = [];
+  const said = new Set<string>();
+  for (const p of plans.slice().sort((a, b) => b.count - a.count)) {
+    for (const scan of p.scans) {
+      if (scan.tableRows < minRows || !scan.columns.length || scan.rows > 0.1 * scan.tableRows) continue;
+      const statement = indexStatement(scan.table, scan.columns);
+      if (said.has(statement)) continue;
+      said.add(statement);
+      const sql = p.text.replace(/\s+/g, ' ').trim();
+      out.push({
+        kind: 'index',
+        root: p.text,
+        ms: 0,
+        message: `${sql.length > 120 ? `${sql.slice(0, 117)}...` : sql} (run ${p.count} time${p.count === 1 ? '' : 's'}) reads all ~${scan.tableRows.toLocaleString('en-US')} rows of ${scan.table} to return ~${scan.rows} (Seq Scan, Filter: ${scan.filter})`,
+        fix: `add an index: ${statement} (from EXPLAIN on this database: check it on production-sized data)`,
+      });
+    }
+  }
+  return out;
 }
 
 /** A short Markdown summary for a pull-request comment or a CI job summary */
