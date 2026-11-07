@@ -112,7 +112,7 @@ export function sqlLabel(sql: unknown): string {
   const cleaned = text.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, ' ').trim();
   const verb = (cleaned.split(/\s+/)[0] || 'query').toUpperCase();
   // users, public.accounts, "public"."Post", `shop`.`orders`
-  const table = /\b(?:from|into|update|join|table)\s+((?:"[^"]+"|`[^`]+`|[\w$]+)(?:\.(?:"[^"]+"|`[^`]+`|[\w$]+))*)/i.exec(cleaned);
+  const table = /\b(?:from|into|update|join|table(?:\s+if(?:\s+not)?\s+exists)?)\s+((?:"[^"]+"|`[^`]+`|[\w$]+)(?:\.(?:"[^"]+"|`[^`]+`|[\w$]+))*)/i.exec(cleaned);
   return table ? `${verb} ${table[1].replace(/["`]/g, '')}` : verb;
 }
 
@@ -243,6 +243,95 @@ export function instrumentRedis(tp: OptimizedPerformanceMonitor, Redis: any, opt
     const name = command && command.name ? String(command.name).toUpperCase() : 'COMMAND';
     return trackCall(tp, `redis ${name}`, options, this, original, [command, ...rest], -1);
   }, restores);
+  return () => restores.forEach(r => r());
+}
+
+const redisName = (args: unknown): string => {
+  const first = Array.isArray(args) ? args[0] : undefined;
+  return first !== undefined && first !== null && String(first) ? String(first).toUpperCase() : 'COMMAND';
+};
+
+/** The prototype that defines a node-redis client's sendCommand (RedisClient) */
+function nodeRedisPrototype(redis: any): any {
+  if (!redis || typeof redis.createClient !== 'function') return undefined;
+  let client: any;
+  try {
+    client = redis.createClient();   // not connected: no socket is opened
+  } catch {
+    return undefined;
+  }
+  for (let p = Object.getPrototypeOf(client); p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
+    if (Object.prototype.hasOwnProperty.call(p, 'sendCommand')) return p;
+  }
+  return undefined;
+}
+
+/**
+ * Track a batch of queued commands (MULTI or pipeline) as one span per
+ * command, all ending when the batch replies (they share one round trip).
+ */
+function trackBatch(tp: OptimizedPerformanceMonitor, options: DriverOptions, commands: unknown, run: () => unknown): unknown {
+  const list = Array.isArray(commands) ? commands : [];
+  const spans = list.map((c: any) => tp.start(`redis ${redisName(c && c.args)}`, options));
+  const end = (error?: unknown) => spans.forEach(s => s.end(error));
+  let result: unknown;
+  try {
+    result = run();
+  } catch (error) {
+    end(error);
+    throw error;
+  }
+  if (isPromiseLike(result)) result.then(() => end(), error => end(error));
+  else end();
+  return result;
+}
+
+/**
+ * node-redis (`redis` / `@redis/client`) 4 and 5: every command, "redis GET",
+ * "redis HSET"; MULTI and pipeline commands are tracked individually.
+ * (v4 legacyMode clients are not covered.)
+ *
+ *   instrumentNodeRedis(tp, require('redis'));
+ */
+export function instrumentNodeRedis(tp: OptimizedPerformanceMonitor, redis: any, options: DriverOptions = {}): Uninstall {
+  const restores: Uninstall[] = [];
+  const proto = nodeRedisPrototype(redis);
+  if (!proto) return () => undefined;
+  // v5: every command (and v4: raw client.sendCommand) goes through sendCommand
+  patchMethod(proto, 'sendCommand', original => function (this: unknown, args: unknown, opts: any, ...rest: unknown[]) {
+    // v4 isolated commands are re-sent on an isolated client: tracked there
+    if (opts && opts.isolated) return original.call(this, args, opts, ...rest);
+    return trackCall(tp, `redis ${redisName(args)}`, options, this, original, [args, opts, ...rest], -1);
+  }, restores);
+  // v4: generated commands (client.get, client.GET, client.clientSetName ...)
+  // call a privately captured executor, so each command method is wrapped.
+  // Their names give the command: CLIENT_SETNAME -> "CLIENT SETNAME".
+  if (typeof proto.commandsExecutor === 'function') {
+    const names = Object.getOwnPropertyNames(proto);
+    const commands = new Map<string, string>();
+    for (const n of names) if (/^[A-Z][A-Z0-9_]*$/.test(n)) commands.set(n.replace(/_/g, '').toLowerCase(), n.replace(/_/g, ' '));
+    for (const n of names) {
+      const command = commands.get(n.replace(/_/g, '').toLowerCase());
+      if (!command || command === 'MULTI') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, n);
+      if (!descriptor || typeof descriptor.value !== 'function') continue;
+      patchMethod(proto, n, original => function (this: unknown, ...args: unknown[]) {
+        return trackCall(tp, `redis ${command}`, options, this, original, args, -1);
+      }, restores);
+    }
+  }
+  patchMethod(proto, 'executeScript', original => function (this: unknown, ...args: unknown[]) {
+    return trackCall(tp, 'redis EVALSHA', options, this, original, args, -1);
+  }, restores);
+  patchMethod(proto, 'executeFunction', original => function (this: unknown, ...args: unknown[]) {
+    return trackCall(tp, 'redis FCALL', options, this, original, args, -1);
+  }, restores);
+  // MULTI / pipeline: v4 multiExecutor, v5 _executeMulti and _executePipeline
+  for (const method of ['multiExecutor', '_executeMulti', '_executePipeline']) {
+    patchMethod(proto, method, original => function (this: unknown, commands: unknown, ...rest: unknown[]) {
+      return trackBatch(tp, options, commands, () => original.call(this, commands, ...rest));
+    }, restores);
+  }
   return () => restores.forEach(r => r());
 }
 

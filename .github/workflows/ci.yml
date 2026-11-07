@@ -126,7 +126,7 @@ jobs:
   driver-compat:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16

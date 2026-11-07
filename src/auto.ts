@@ -12,11 +12,11 @@
 import type { OptimizedPerformanceMonitor } from './core/optimized-performance-monitor';
 import { loadNodeBuiltin } from './core/env';
 import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, labelKoaRoutes, Uninstall, wrapFastifyFactory } from './instrument';
-import { instrumentBetterSqlite3, instrumentMongo, instrumentMysql, instrumentMysql2, instrumentPg, instrumentPrisma, instrumentRedis } from './drivers';
+import { instrumentBetterSqlite3, instrumentMongo, instrumentMysql, instrumentMysql2, instrumentPg, instrumentNodeRedis, instrumentPrisma, instrumentRedis } from './drivers';
 
-export type AutoTarget = 'server' | 'http' | 'fetch' | 'pg' | 'mysql2' | 'mongodb' | 'ioredis' | 'prisma' | 'better-sqlite3' | 'mysql';
+export type AutoTarget = 'server' | 'http' | 'fetch' | 'pg' | 'mysql2' | 'mongodb' | 'ioredis' | 'prisma' | 'better-sqlite3' | 'mysql' | 'redis';
 
-export const AUTO_TARGETS: AutoTarget[] = ['server', 'http', 'fetch', 'pg', 'mysql2', 'mongodb', 'ioredis', 'prisma', 'better-sqlite3', 'mysql'];
+export const AUTO_TARGETS: AutoTarget[] = ['server', 'http', 'fetch', 'pg', 'mysql2', 'mongodb', 'ioredis', 'prisma', 'better-sqlite3', 'mysql', 'redis'];
 
 export interface AutoInstrumentOptions {
   /** Targets to skip, e.g. ['http'] */
@@ -133,6 +133,9 @@ export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoIns
       return instrumentPrisma(tp, mod);
     });
     if (deps.names.has('ioredis')) add('ioredis', () => instrumentRedis(tp, load('ioredis')));
+    // node-redis: the `redis` package, or its client used directly
+    if (deps.names.has('redis')) add('redis', () => instrumentNodeRedis(tp, load('redis')));
+    else if (deps.names.has('@redis/client')) add('redis', () => instrumentNodeRedis(tp, load('@redis/client')));
     if (deps.names.has('mongodb')) add('mongodb', () => instrumentMongo(tp, load('mongodb')));
     else if (deps.names.has('mongoose')) {
       // Mongoose's own copy of the driver, without loading Mongoose itself
