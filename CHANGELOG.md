@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **MongoDB driver 3.x / Mongoose 5:** `aggregate()` was labelled `mongo find $cmd`; it is now `mongo aggregate users`.
+
+### Changed
+- CI runs every driver integration against old and new majors on real servers (pg 8.0 and 8.x, mysql2 2 and 3, mysql 2, mongodb 3–7, Mongoose 5–8, ioredis 4 and 5, better-sqlite3 11 and 12): `test/compat`. The first run found the bug above.
+- Timing tests that assert on synchronous durations use a virtual clock, so a loaded CI machine can't fail them.
+
 ## [1.8.0] - 2026-11-06
 
 ### Added

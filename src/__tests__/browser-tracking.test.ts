@@ -3,7 +3,7 @@
  * README: createTracePerf({...}).track / createTrackable.
  */
 import { createTracePerf, BrowserLogger, TrackingMode } from '../browser';
-import { busyWait, captureLogs } from './helpers/console';
+import { busyWait, captureLogs, withVirtualClock } from './helpers/console';
 
 describe('browser tracking', () => {
   let logs: ReturnType<typeof captureLogs>;
@@ -74,7 +74,7 @@ describe('browser tracking', () => {
     expect(logs.lines()).toEqual([]);
   });
 
-  test('threshold hides fast calls', () => {
+  test('threshold hides fast calls', withVirtualClock(() => {
     const tracker = createTracePerf({ threshold: 60 });
     tracker.track(() => 1, { label: 'fastOperation' });
     tracker.track(() => busyWait(70), { label: 'slowOperation' });
@@ -82,7 +82,7 @@ describe('browser tracking', () => {
     expect(logs.text()).not.toContain('fastOperation');
     expect(logs.text()).not.toContain('perCallFast');
     expect(logs.text()).toContain('slowOperation');
-  });
+  }));
 
   test('createTracePerf({ logger }) uses the given BrowserLogger', () => {
     const logger = new BrowserLogger({ silent: true });
