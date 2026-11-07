@@ -195,12 +195,11 @@ export function instrumentPg(tp: OptimizedPerformanceMonitor, pg: any, options: 
       const text = typeof first === 'string' ? first : first && typeof first.text === 'string' ? first.text : undefined;
       if (text !== undefined) {
         const values = Array.isArray(args[1]) ? args[1] : first && Array.isArray(first.values) ? first.values : undefined;
-        const client = this;
         const pool = lastPgPool;
         try {
           sqlObserver({
             driver: 'pg', text, values,
-            run: (sql, vals) => (pool && !pool.ending && !pool.ended ? pool.query(OWN_SQL + sql, vals) : client.query(OWN_SQL + sql, vals)).then((r: any) => r.rows),
+            run: (sql, vals) => (pool && !pool.ending && !pool.ended ? pool.query(OWN_SQL + sql, vals) : this.query(OWN_SQL + sql, vals)).then((r: any) => r.rows),
           });
         } catch {
           // observing must never break the query
@@ -210,6 +209,8 @@ export function instrumentPg(tp: OptimizedPerformanceMonitor, pg: any, options: 
     return trackCall(tp, `pg ${sqlLabel(args[0])}`, options, this, original, args);
   }, restores);
   patchMethod(pg && pg.Pool && pg.Pool.prototype, 'query', original => function (this: unknown, ...args: unknown[]) {
+    // The index check runs its EXPLAINs on the app's own pool: remember the last one used
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     lastPgPool = this;
     return original.apply(this, args);
   }, restores);

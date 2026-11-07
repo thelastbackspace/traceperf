@@ -137,7 +137,9 @@ const cases: Record<string, { paths: string[]; expect: Array<{ kind: string | st
   JSON.parse(fs.readFileSync(path.join(APPS, 'cases.json'), 'utf8'));
 
 describe('known-slow example apps: explain names the planted cause', () => {
-  it.each(Object.keys(cases))('%s', async name => {
+  // Cases that need a real database run where CI provides one (TRACEPERF_PG_URL)
+  const runnable = Object.keys(cases).filter(name => !(cases[name] as { requires?: string }).requires || !!process.env.TRACEPERF_PG_URL);
+  it.each(runnable)('%s', async name => {
     const c = cases[name];
     const out: string[] = [];
     const argv = [path.join(APPS, name, 'server.js'), ...c.paths.flatMap(p => ['--path', p]), '-d', '1s', '--json'];
