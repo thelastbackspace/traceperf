@@ -412,3 +412,21 @@ describe('config file and login', () => {
     }
   });
 });
+
+describe('markdownReport', () => {
+  const { markdownReport } = jest.requireActual('../run');
+  it('leads with the verdict, lists baseline changes, folds the timing findings', () => {
+    const md = markdownReport({
+      trees: 30, findings: [{ kind: 'repeated', root: 'GET /orders', ms: 40, message: 'GET /orders called q 12 times', fix: 'batch it' }],
+      baseline: { regressions: ['GET /orders: q 1 → 12 per request (an N+1?)'], improvements: [], notes: [] }, baselineFile: 'b.json',
+      load: { requests: 30, durationMs: 300, statuses: { 200: 30 }, errors: 0, latency: {} },
+    });
+    expect(md).toMatch(/^### traceperf: ✖ more calls per request than the baseline\n\n- ✖ GET \/orders: q 1 → 12/);
+    expect(md).toContain('<details><summary>Why it was slow');
+    expect(md).toContain('  - fix: batch it');
+    expect(md).toContain('30 requests in 0.3 s (100/s), 30× 200');
+    expect(markdownReport({ trees: 5, findings: [], baseline: { regressions: [], improvements: [], notes: [] }, baselineFile: 'b.json' }))
+      .toMatch(/^### traceperf: ✔ no new queries or calls\n\n- ✔ same calls per request on every route/);
+    expect(markdownReport({ trees: 5, findings: [] })).toMatch(/^### traceperf: no issues found/);
+  });
+});

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "routes": {
+    "GET /orders": {
+      "requests": 10,
+      "calls": {
+        "SELECT * FROM items WHERE order_id IN (?)": 1,
+        "SELECT * FROM orders LIMIT 12": 1
+      }
+    }
+  },
+  "problems": []
+}
