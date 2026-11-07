@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-07
+
 ### Fixed
 - **Queries were attributed to the wrong request when a connection pool was full.** pg-pool, mysql2 and mysql call a queued request's callback from whichever request released a connection, so its queries landed in that other request's tree, or in none. Pool callbacks, and every callback a tracked driver call takes, now keep the caller's context. With a pool of 1 and 4 concurrent requests, 3 of the 4 showed no queries before (found while adding pool-wait tracking).
 
