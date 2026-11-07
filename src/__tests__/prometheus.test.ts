@@ -1,7 +1,7 @@
 import * as http from 'http';
 import { AddressInfo } from 'net';
 import { createTracePerf, prometheusExporter } from '../index';
-import { busyWait } from './helpers/console';
+import { busyWait, useVirtualClock } from './helpers/console';
 
 /** Minimal exposition-format parser: { 'metric{labels}': value } */
 function parse(text: string): Record<string, number> {
@@ -16,10 +16,11 @@ function parse(text: string): Record<string, number> {
 }
 
 test('histogram buckets, sum, count and errors per label', () => {
+  const restore = useVirtualClock();
+  try {
   const prom = prometheusExporter({ buckets: [0.02, 0.2] });
   const tp = createTracePerf({ silent: true, trackMemory: false, plugins: [prom] });
   const query = tp.createTrackable((ms: number) => busyWait(ms), { label: 'db.query' });
-  // A call doing nothing must land in the first bucket even on a busy machine (wide margin)
   tp.track(() => { query(0); query(40); }, { label: 'GET /x' });
   expect(() => tp.track(() => { throw new Error('x'); }, { label: 'job "a"\nb' })).toThrow();
   const m = parse(prom.metrics());
@@ -27,10 +28,13 @@ test('histogram buckets, sum, count and errors per label', () => {
   expect(m['traceperf_call_duration_seconds_bucket{name="db.query",le="0.2"}']).toBe(2);
   expect(m['traceperf_call_duration_seconds_bucket{name="db.query",le="+Inf"}']).toBe(2);
   expect(m['traceperf_call_duration_seconds_count{name="db.query"}']).toBe(2);
-  expect(m['traceperf_call_duration_seconds_sum{name="db.query"}']).toBeGreaterThanOrEqual(0.039);
+  expect(m['traceperf_call_duration_seconds_sum{name="db.query"}']).toBeCloseTo(0.04, 6);
   expect(m['traceperf_call_duration_seconds_count{name="GET /x"}']).toBe(1);
   expect(m['traceperf_call_errors_total{name="job \\"a\\"\\nb"}']).toBe(1);
   expect(prom.metrics()).toMatch(/# TYPE traceperf_call_duration_seconds histogram/);
+  } finally {
+    restore();
+  }
 });
 
 test('rootsOnly, label cap, reset, invalid prefix', () => {

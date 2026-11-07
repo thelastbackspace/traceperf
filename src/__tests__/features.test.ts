@@ -13,7 +13,7 @@ import {
   StatsCollector,
   OtelApiLike,
 } from '../index';
-import { busyWait, captureLogs } from './helpers/console';
+import { busyWait, captureLogs, withVirtualClock } from './helpers/console';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -159,7 +159,7 @@ describe('statistics', () => {
     });
   });
 
-  test('tracked calls feed stats: counts and errors are exact', () => {
+  test('tracked calls feed stats: counts and errors are exact', withVirtualClock(() => {
     const tp = createTracePerf({ silent: true });
     const f = tp.createTrackable((ms: number) => { busyWait(ms); if (ms > 20) throw new Error('slow'); }, { label: 'work' });
     for (const ms of [0, 0, 0, 0, 30]) {
@@ -168,11 +168,11 @@ describe('statistics', () => {
     const s = tp.getStats('work')!;
     expect(s.count).toBe(5);
     expect(s.errors).toBe(1);
-    expect(s.max).toBeGreaterThanOrEqual(29);
+    expect(s.max).toBeCloseTo(30, 6);
     expect(s.p50).toBeLessThan(s.max);
     expect(s.min).toBeLessThanOrEqual(s.p50);
     expect(s.mean).toBeCloseTo(s.total / 5, 6);
-  });
+  }));
 
   test('memory stays bounded with many calls and many labels', () => {
     const tp = createTracePerf({ silent: true, trackMemory: false, stats: { reservoirSize: 16, maxLabels: 10 } });
@@ -424,7 +424,7 @@ describe('event loop monitor', () => {
 });
 
 describe('onSlow', () => {
-  test('fires for slow calls at any depth with a single threshold', () => {
+  test('fires for slow calls at any depth with a single threshold', withVirtualClock(() => {
     const tp = createTracePerf({ silent: true, trackMemory: false });
     const hits: string[] = [];
     const off = tp.onSlow(15, (call, root) => hits.push(`${call.label}@${root.label}`));
@@ -434,9 +434,9 @@ describe('onSlow', () => {
     off();
     tp.track(() => busyWait(20), { label: 'afterOff' });
     expect(hits).toEqual(['root@root', 'slowChild@root']);
-  });
+  }));
 
-  test('per-label thresholds with a * default', () => {
+  test('per-label thresholds with a * default', withVirtualClock(() => {
     const tp = createTracePerf({ silent: true, trackMemory: false, trackingMode: TrackingMode.PERFORMANCE });
     const hits: string[] = [];
     tp.onSlow({ 'db.query': 5, '*': 1000 }, call => hits.push(call.label));
@@ -447,5 +447,5 @@ describe('onSlow', () => {
     tp.onSlow({ only: 1 }, call => none.push(call.label));
     tp.track(() => busyWait(5), { label: 'unlisted' });
     expect(none).toEqual([]);
-  });
+  }));
 });

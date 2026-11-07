@@ -207,6 +207,9 @@ export function instrumentMongo(tp: OptimizedPerformanceMonitor, mongodb: any, o
     }, restores);
   }
   const cursorName = (cursor: any): string => {
+    // Driver 3.x aggregation cursors run on "db.$cmd"; the collection is the operation's target
+    const target = cursor && cursor.operation && cursor.operation.target;
+    if (typeof target === 'string') return target;
     const ns = cursor && cursor.namespace;
     if (ns && (ns.collection || ns.coll)) return ns.collection || ns.coll;
     // Driver 3.x: "db.collection"
@@ -218,7 +221,10 @@ export function instrumentMongo(tp: OptimizedPerformanceMonitor, mongodb: any, o
     const proto = mongodb && mongodb[className] && mongodb[className].prototype;
     patchMethod(proto, 'toArray', original => function (this: any, ...args: unknown[]) {
       const cb = typeof args[args.length - 1] === 'function' ? args.length - 1 : -1;
-      return trackCall(tp, `mongo ${op} ${cursorName(this)}`, options, this, original, args, cb);
+      // Driver 3.x: AggregationCursor inherits Cursor's toArray, so ask the instance
+      const Aggregation = mongodb.AggregationCursor;
+      const kind = typeof Aggregation === 'function' && this instanceof Aggregation ? 'aggregate' : op;
+      return trackCall(tp, `mongo ${kind} ${cursorName(this)}`, options, this, original, args, cb);
     }, restores);
   }
   return () => restores.forEach(r => r());
