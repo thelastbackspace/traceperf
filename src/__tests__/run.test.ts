@@ -137,7 +137,9 @@ const cases: Record<string, { paths: string[]; expect: Array<{ kind: string | st
   JSON.parse(fs.readFileSync(path.join(APPS, 'cases.json'), 'utf8'));
 
 describe('known-slow example apps: explain names the planted cause', () => {
-  it.each(Object.keys(cases))('%s', async name => {
+  // Cases that need a real database run where CI provides one (TRACEPERF_PG_URL)
+  const runnable = Object.keys(cases).filter(name => !(cases[name] as { requires?: string }).requires || !!process.env.TRACEPERF_PG_URL);
+  it.each(runnable)('%s', async name => {
     const c = cases[name];
     const out: string[] = [];
     const argv = [path.join(APPS, name, 'server.js'), ...c.paths.flatMap(p => ['--path', p]), '-d', '1s', '--json'];
@@ -428,5 +430,26 @@ describe('markdownReport', () => {
     expect(markdownReport({ trees: 5, findings: [], baseline: { regressions: [], improvements: [], notes: [] }, baselineFile: 'b.json' }))
       .toMatch(/^### traceperf: ✔ no new queries or calls\n\n- ✔ same calls per request on every route/);
     expect(markdownReport({ trees: 5, findings: [] })).toMatch(/^### traceperf: no issues found/);
+  });
+});
+
+describe('indexFindings', () => {
+  const { indexFindings } = jest.requireActual('../run');
+  const scan = (over: object) => ({ table: 'orders', filter: '(customer_id = 5)', rows: 12, columns: ['customer_id'], tableRows: 60000, ...over });
+  it('reports selective full scans of big tables, once per index', () => {
+    const [f, ...rest] = indexFindings([
+      { driver: 'pg', text: 'SELECT * FROM orders WHERE customer_id = $1', count: 500, scans: [scan({})] },
+      { driver: 'pg', text: 'SELECT id FROM orders WHERE customer_id = $1', count: 20, scans: [scan({})] },
+    ]);
+    expect(rest).toEqual([]);
+    expect(f.kind).toBe('index');
+    expect(f.message).toMatch(/\(run 500 times\) reads all ~60,000 rows of orders to return ~12/);
+    expect(f.fix).toMatch(/^add an index: CREATE INDEX ON orders \(customer_id\)/);
+  });
+  it('small tables, unselective filters and filters without usable columns are fine', () => {
+    expect(indexFindings([{ driver: 'pg', text: 'q', count: 9, scans: [scan({ tableRows: 500 })] }])).toEqual([]);
+    expect(indexFindings([{ driver: 'pg', text: 'q', count: 9, scans: [scan({ rows: 30000 })] }])).toEqual([]);
+    expect(indexFindings([{ driver: 'pg', text: 'q', count: 9, scans: [scan({ columns: [] })] }])).toEqual([]);
+    expect(indexFindings([{ driver: 'pg', text: 'q', count: 9, scans: [scan({ tableRows: 500 })] }], 100)).toHaveLength(1);
   });
 });

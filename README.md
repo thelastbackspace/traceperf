@@ -93,6 +93,14 @@ The database was fast; `buildReport` was blocking it. That only shows up when re
      fix: Mongoose is building full documents: add .lean() to read-only queries … and .select() only the fields you send
   ```
 - **Timings you can trust:** after the warm-up, `run` sends a few requests one at a time (`--probe`) and takes the per-request findings (a call taking most of a request, sequential awaits, N+1) from those. Under concurrent load every `await` also waits for the busy event loop, which makes fast queries look slow.
+- **Missing indexes (Postgres):** after the load, the app runs plain `EXPLAIN` (the query is planned, not executed) on the `SELECT`s it made and reports full scans of big tables that an index would avoid:
+
+  ```
+  🔍 SELECT * FROM orders WHERE customer_id = $1 (run 1219 times) reads all ~60,000 rows of orders to return ~12 (Seq Scan, Filter: (customer_id = 0))
+     fix: add an index: CREATE INDEX ON orders (customer_id)
+  ```
+  Postgres scans small tables on purpose, so a test database with little data rarely shows one: point the run at realistic data. Tables under 10,000 rows are ignored. `--no-explain` turns it off.
+- **Pool exhaustion:** with `pg` and `mysql2`, the time a request waits for a free connection from a full pool is tracked (`pg pool wait`) and reported, with the pool setting to change: "GET /report waited 65 ms for a free pg connection (79% of the request): every connection in the pool was in use".
 - **Wrong setup is said first:** "2117 of 2117 responses failed (most: 401 Unauthorized)…" instead of timings of error pages.
 
 Checked on real apps, not only on the planted ones: Prisma's REST example, the RealWorld API (Express + Prisma), an Express + Mongoose boilerplate and a NestJS + TypeORM app.

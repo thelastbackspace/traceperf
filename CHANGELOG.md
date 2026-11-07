@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Queries were attributed to the wrong request when a connection pool was full.** pg-pool, mysql2 and mysql call a queued request's callback from whichever request released a connection, so its queries landed in that other request's tree, or in none. Pool callbacks, and every callback a tracked driver call takes, now keep the caller's context. With a pool of 1 and 4 concurrent requests, 3 of the 4 showed no queries before (found while adding pool-wait tracking).
+
 ### Fixed (found by the new evaluation set)
 - `run` reported each of several `Promise.all` calls as "dominant" (each spans most of the request). Parallel calls are no longer dominant, and a dominant call must take at least 50 ms (`dominantMinMs`).
 - Blocking code was reported three times: as blocking, as its own route queueing, and as the process being busy. Only the bystanders that waited behind it are listed now.
 - `traceperf/auto` wrote each request tree with its own `appendFileSync`, and under load that showed up as the app's "CPU cost" (`writeFileUtf8`). Writes are batched every 20 ms.
 
 ### Added
+- **Missing indexes:** `traceperf run` EXPLAINs (plans, never runs) the app's Postgres `SELECT`s after the load and reports full scans of tables with 10,000+ rows that an index would avoid, with the `CREATE INDEX` to add. `--no-explain` turns it off.
+- **Pool exhaustion:** `pg` and `mysql2` pools track the wait for a free connection when every connection is in use (`pg pool wait`, `mysql pool wait`); `run`/`explain` report it with the setting to change.
 - **GitHub Action** (`uses: thelastbackspace/traceperf@<tag>`): runs the baseline check, fails the job on more calls per request, and posts one pull-request comment it updates on every push. `traceperf run --markdown file.md` writes the same summary.
 - `traceperf run` reads `traceperf.config.json` (or `--config file`); command-line options win. A `login` step logs in before the traffic and sends the returned token or cookies with every request; `${NAME}` in the file is read from the environment.
 - `npm run eval` scores `traceperf run` on 20 apps in `examples/slow-apps`: 12 with a planted problem, 8 clean ones where the right answer is "no issues". CI fails on any missed problem or false alarm. Before these fixes: 17/17 found, 15 false alarms; after: 17/17, 0.

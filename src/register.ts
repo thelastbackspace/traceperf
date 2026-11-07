@@ -30,6 +30,8 @@ import { blockingRanges, explain, formatFindings } from './core/explain';
 import { BlockingProfileEntry, blockingHotspots, profileSlowCalls, SlowCallProfiler } from './core/cpu-profile';
 import { jsonLinesExporter } from './core/exporters';
 import { loadNodeBuiltin } from './core/env';
+import { observeSql, ObservedSql } from './drivers';
+import { seqScans } from './core/sql-plan';
 import type { ExecutionRecord } from './core/records';
 
 const env: Record<string, string | undefined> = (typeof process !== 'undefined' && process.env) || {};
@@ -97,6 +99,55 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
       // reporting must never break the app
     }
   };
+  // traceperf run's index check: remember each distinct SELECT; when run asks
+  // (a request file, after the load), EXPLAIN them (planned, never executed)
+  const explainOutput = env.TRACEPERF_EXPLAIN_OUTPUT;
+  if (explainOutput && fs) {
+    const seen = new Map<string, { count: number; sample: ObservedSql }>();
+    let explaining = false;
+    observeSql(q => {
+      if (explaining || !/^\s*select\b/i.test(q.text)) return;
+      const entry = seen.get(q.text);
+      if (entry) entry.count++;
+      else if (seen.size < 500) seen.set(q.text, { count: 1, sample: q });
+    });
+    const timer = setInterval(() => {
+      if (!fs.existsSync(`${explainOutput}.request`)) return;
+      clearInterval(timer);
+      explaining = true;
+      const top = [...seen.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 30);
+      const lines: string[] = [];
+      const sizes = new Map<string, number>();
+      (async () => {
+        for (const [text, { count, sample }] of top) {
+          try {
+            const rows = await sample.run(`EXPLAIN (FORMAT JSON) ${text}`, sample.values);
+            const plan = rows[0] && (rows[0]['QUERY PLAN'] ?? Object.values(rows[0])[0]);
+            const scans = seqScans(typeof plan === 'string' ? JSON.parse(plan) : plan);
+            for (const scan of scans) {
+              if (!sizes.has(scan.table)) {
+                const r = await sample.run('SELECT reltuples::bigint AS n FROM pg_class WHERE oid = to_regclass($1)', [scan.table]).catch(() => []);
+                sizes.set(scan.table, Number(r[0] && r[0].n) || 0);
+              }
+            }
+            if (scans.length) lines.push(JSON.stringify({ driver: sample.driver, text, count, scans: scans.map(x => ({ ...x, tableRows: sizes.get(x.table) || 0 })) }));
+          } catch {
+            // a statement EXPLAIN can't take (parameters it can't infer, permissions): skip it
+          }
+        }
+      })().finally(() => {
+        try {
+          fs.writeFileSync(explainOutput, lines.join('\n') + (lines.length ? '\n' : ''));
+          fs.writeFileSync(`${explainOutput}.done`, '1');
+        } catch {
+          // reporting must never break the app
+        }
+        explaining = false;
+      });
+    }, 100);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
   const perf = (globalThis as any).performance;
   if (loadOutput && perf && typeof perf.eventLoopUtilization === 'function' && typeof process.cpuUsage === 'function') {
     let lastElu = perf.eventLoopUtilization();

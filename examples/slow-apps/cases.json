@@ -214,5 +214,43 @@
       "/flags"
     ],
     "expect": []
+  },
+  "pool-exhaustion": {
+    "paths": [
+      "/report"
+    ],
+    "requires": "pg",
+    "expect": [
+      {
+        "kind": "pool",
+        "includes": "for a free pg connection"
+      }
+    ]
+  },
+  "missing-index": {
+    "paths": [
+      "/orders"
+    ],
+    "requires": "pg",
+    "expect": [
+      {
+        "kind": "index",
+        "includes": "traceperf_eval_orders"
+      }
+    ]
+  },
+  "clean-indexed": {
+    "paths": [
+      "/orders"
+    ],
+    "requires": "pg",
+    "expect": []
+  },
+  "clean-pool": {
+    "paths": [
+      "/report"
+    ],
+    "requires": "pg",
+    "expect": []
   }
 }

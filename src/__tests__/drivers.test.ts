@@ -25,6 +25,7 @@ import {
   instrumentRedis,
   sqlLabel,
 } from '../index';
+import { observeSql, ObservedSql } from '../drivers';
 
 function setup() {
   const roots: ExecutionRecord[] = [];
@@ -475,5 +476,83 @@ describe('instrumentBetterSqlite3 (database shaped like better-sqlite3: Statemen
     roots.length = 0;
     tp.track(() => { db.prepare('SELECT * FROM users').all(); }, { label: 'after' });
     expect(labels(roots[0])).toEqual([]);
+  });
+});
+
+describe('pg pools without a server (fake pg)', () => {
+  // Shaped like pg: Client.query(text, values, cb) and pg-pool's counters and callback queue
+  function fakePg() {
+    class Client {
+      query(text: string, values: unknown, cb?: (e: unknown, r: unknown) => void) {
+        const done = typeof values === 'function' ? values as typeof cb : cb;
+        const result = { rows: [{ 'QUERY PLAN': [{ Plan: { 'Node Type': 'Seq Scan' } }] }] };
+        if (done) { setTimeout(() => done(null, result), 2); return undefined; }
+        return new Promise(r => setTimeout(() => r(result), 2));
+      }
+    }
+    class Pool {
+      options = { max: 1 };
+      totalCount = 0;
+      idleCount = 0;
+      private queue: Array<(e: unknown, c: Client, release: () => void) => void> = [];
+      private client = new Client();
+      connect(cb: (e: unknown, c: Client, release: () => void) => void) {
+        const release = () => {
+          const next = this.queue.shift();
+          // The next waiter is called from inside this release: another request's context
+          if (next) next(null, this.client, release);
+          else this.idleCount = 1;
+        };
+        if (this.totalCount < this.options.max) { this.totalCount++; setTimeout(() => cb(null, this.client, release), 1); return; }
+        if (this.idleCount > 0) { this.idleCount = 0; setTimeout(() => cb(null, this.client, release), 1); return; }
+        this.queue.push(cb);
+      }
+      query(text: string, values?: unknown[]) {
+        return new Promise((resolve, reject) => this.connect((e, c, release) => {
+          if (e) return reject(e);
+          (c.query(text, values) as Promise<unknown>).then(r => { release(); resolve(r); }, reject);
+        }));
+      }
+    }
+    return { Client, Pool };
+  }
+
+  test('a full pool: each request keeps its own queries, and the wait is tracked', async () => {
+    const pg = fakePg();
+    const { tp, roots } = setup();
+    const uninstall = instrumentPg(tp, pg);
+    const pool = new pg.Pool();
+    try {
+      await Promise.all([1, 2, 3].map(i => tp.track(async () => {
+        await pool.query(`SELECT ${i}`);
+      }, { label: `req${i}` })));
+    } finally {
+      uninstall();
+    }
+    const requests = roots.filter(r => r.label.startsWith('req'));
+    expect(requests).toHaveLength(3);
+    for (const r of requests) expect(labels(r).filter(l => l !== 'pg pool wait')).toEqual(['pg SELECT']);
+    expect(requests.filter(r => labels(r).includes('pg pool wait')).length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('observeSql sees statements and runs its own on the same pool, untracked', async () => {
+    const pg = fakePg();
+    const { tp, roots } = setup();
+    const uninstall = instrumentPg(tp, pg);
+    const seen: ObservedSql[] = [];
+    observeSql(q => seen.push(q));
+    const pool = new pg.Pool();
+    try {
+      await tp.track(() => pool.query('SELECT * FROM users WHERE id = $1', [7]), { label: 'job' });
+      expect(seen.map(q => [q.text, q.values])).toEqual([['SELECT * FROM users WHERE id = $1', [7]]]);
+      const rows = await seen[0].run('EXPLAIN (FORMAT JSON) SELECT 1');
+      expect(rows[0]['QUERY PLAN']).toBeDefined();
+      // The EXPLAIN was neither observed again nor tracked as the app's query
+      expect(seen).toHaveLength(1);
+    } finally {
+      observeSql(undefined);
+      uninstall();
+    }
+    expect(roots.map(r => r.label)).toEqual(['job']);
   });
 });
