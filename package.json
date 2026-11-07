@@ -62,6 +62,7 @@
     "build:browser": "tsc -p tsconfig.browser.json && node scripts/build-browser-global.js",
     "build:all": "npm run build && npm run build:esm && npm run build:browser",
     "test": "jest",
+    "eval": "node scripts/eval.js",
     "lint": "eslint src --ext .ts --max-warnings 0",
     "format": "prettier --write \"src/**/*.ts\"",
     "prepare": "husky || true",

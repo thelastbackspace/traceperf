@@ -70,6 +70,8 @@ export interface ExplainOptions {
   minMs?: number;
   /** A child taking at least this fraction of its parent is "dominant" (default 0.6) */
   dominantShare?: number;
+  /** A dominant call must also take at least this long (default 50 ms) */
+  dominantMinMs?: number;
   /** Same label this many times under one parent is "repeated" (default 5) */
   repeatCount?: number;
   /** Return at most this many findings, largest first (default 20) */
@@ -136,6 +138,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
   const blockingMs = options.blockingMs ?? 10;
   const minMs = options.minMs ?? 5;
   const dominantShare = options.dominantShare ?? 0.6;
+  const dominantMinMs = options.dominantMinMs ?? 50;
   const repeatCount = options.repeatCount ?? 5;
   const findings: Array<Finding & { group?: string }> = [];
 
@@ -289,6 +292,11 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
     for (const k of root.children) {
       // A request that makes one call is always "mostly" that call: only say so when it is slow
       if (root.children.length === 1 && k.duration < 100) continue;
+      // A call under dominantMinMs is not worth chasing, whatever its share
+      if (k.duration < dominantMinMs) continue;
+      // Calls run in parallel (Promise.all) each span most of the request: none of them "dominates"
+      const parallel = root.children.some(o => o !== k && overlap(k.startTime, k.startTime + k.duration, o.startTime, o.startTime + o.duration) >= 0.5 * k.duration);
+      if (parallel) continue;
       if (k.duration >= minMs && k.duration >= dominantShare * root.duration) {
         const waited = blockers
           .filter(b => b.root !== i)

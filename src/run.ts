@@ -329,6 +329,12 @@ export function busyFinding(samples: LoadSample[], load: LoadResult, window: { s
   };
 }
 
+/** The function a busy finding names first ("CPU time went to: X (file) 83%") */
+function busyTop(f: Finding): string | undefined {
+  const m = /CPU time went to: ([^,(]+?)(?: \(|,| \d+%)/.exec(f.message);
+  return m ? m[1].trim() : undefined;
+}
+
 const STATUS_TEXT: Record<string, string> = {
   400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
   429: 'Too Many Requests', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable',
@@ -643,7 +649,15 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     const cost = loadWindow ? loadCost(samples, load, loadWindow) : undefined;
     // Queueing with nothing blocking and cheap requests: the load test filled the process, as it does
     if (!blocked && cost && cost.perRequest < 5) queued = [];
-    if (busy) {
+    if (blocked) {
+      // A route that itself blocks, or whose wait an explain "blocked" finding already names,
+      // needs no second line saying it queued: keep only the innocent bystanders
+      const blocking = summary.findings.filter(f => f.kind === 'blocking' || f.kind === 'blocked').map(f => f.message);
+      queued = queued.filter(q => !blocking.some(m => m.startsWith(`${q.root} `)));
+    }
+    // Busy because of the blocking code already reported: the same cause twice
+    const busyIsBlocking = !!busy && blocked && summary.findings.some(f => f.kind === 'blocking' && busyTop(busy) !== undefined && f.message.includes(busyTop(busy) as string));
+    if (busy && !busyIsBlocking) {
       // Saturated: "time outside tracked calls" is a symptom of it, not a cause
       // ... and so is a call that is slow only in the tail (it waited for the CPU)
       const tailOnly = (f: Finding) => {
