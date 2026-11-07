@@ -33,7 +33,8 @@ function run(name, c) {
   });
 }
 
-const matches = (f, e) => f.kind === e.kind && f.message.includes(e.includes);
+// kind may be a list: either answer is right (e.g. blocking or busy, depending on machine speed)
+const matches = (f, e) => [].concat(e.kind).includes(f.kind) && f.message.includes(e.includes);
 
 (async () => {
   let hits = 0, misses = 0, falseAlarms = 0, cleanApps = 0, cleanPassed = 0;

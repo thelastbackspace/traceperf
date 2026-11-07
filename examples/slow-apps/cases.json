@@ -135,10 +135,14 @@
     ],
     "expect": [
       {
-        "kind": "blocking",
-        "includes": "GET /catalogue"
+        "kind": [
+          "blocking",
+          "busy"
+        ],
+        "includes": "cpu-json/server.js:9"
       }
-    ]
+    ],
+    "note": "~8-15 ms of JSON per request: blocking on a slow machine, CPU cost (busy) on a fast one; either is right if it names the function"
   },
   "failing-route": {
     "paths": [
