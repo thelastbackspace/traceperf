@@ -101,7 +101,7 @@ Checked on real apps, not only on the planted ones: Prisma's REST example, the R
 - `-c 10` concurrency, `-d 5s` duration or `-n 500` requests, `--method POST`, `--port 3000` (detected by default).
 - `-H "Authorization: Bearer $TOKEN"` (repeatable): request headers, for APIs behind a login.
 - `--probe 10`: requests per path sent one at a time before the load (0 for none).
-- `--html report.html`, `--output calls.jsonl` (keep the trees), `--json`.
+- `--html report.html`, `--output calls.jsonl` (keep the trees), `--json`, `--markdown summary.md` (for a PR comment or job summary).
 - `--warmup 3`: untimed requests per path first, so cold-start work doesn't look like a problem.
 - `--no-profile`: don't sample the CPU.
 - Any start command works: `npx traceperf run -- npm start`.
@@ -148,6 +148,27 @@ It fails when a route makes more calls of any kind per request (database queries
 - run: npm ci && npm run db:seed
 - run: npx traceperf run dist/server.js --path /orders --path /users/1 --baseline perf-baseline.json
 ```
+
+Or use the action, which also comments on the pull request with what changed, and updates that one comment on every push:
+
+<!-- docs:skip -->
+```yaml
+permissions:
+  pull-requests: write
+steps:
+  - uses: actions/checkout@v4
+  - run: npm ci && npm run build && npm run db:seed
+  - uses: thelastbackspace/traceperf@v1.9.0
+    with:
+      run: dist/server.js --path /orders --path /users/1   # or leave out and use traceperf.config.json
+      baseline: perf-baseline.json
+```
+
+> ### traceperf: ✖ more calls per request than the baseline
+> - ✖ GET /orders: SELECT * FROM items WHERE order_id = ? 0 → 12 per request (an N+1?)
+> - ✖ new problem: N+1 in GET /orders
+
+Inputs: `run`, `baseline`, `comment` (default `true`), `fail` (default `true`), `version` (traceperf version, default `1`). Output: `regressed`. The same report goes to the job summary; `--markdown file.md` writes it without the action.
 
 `examples/slow-apps/` has 20 small apps: 12 with one planted problem each (blocking in your code and in built-ins, sequential awaits, N+1 over SQL and over HTTP, a slow or flaky dependency, failing requests…) and 8 clean ones where the right answer is "no issues". `npm run eval` scores `run` on them, and CI fails on a missed problem or a false alarm.
 

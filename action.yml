@@ -1,0 +1,83 @@
+name: traceperf
+description: Fail a pull request that adds database queries or HTTP calls per request (an N+1), and comment what changed
+branding:
+  icon: activity
+  color: orange
+inputs:
+  run:
+    description: 'Arguments for `traceperf run`: the app and its paths, e.g. "dist/server.js --path /orders --path /users/1". Leave empty to use traceperf.config.json.'
+    required: false
+    default: ''
+  baseline:
+    description: Committed baseline file (create it with `npx traceperf run ... --save-baseline perf-baseline.json`)
+    required: false
+    default: perf-baseline.json
+  comment:
+    description: Post (and update) one comment on the pull request with the result
+    required: false
+    default: 'true'
+  fail:
+    description: Fail the job when a route makes more calls per request than the baseline
+    required: false
+    default: 'true'
+  version:
+    description: traceperf version to run (npm version or range, or the path of a local build)
+    required: false
+    default: '1'
+  github-token:
+    description: Token for the comment (needs pull-requests write permission)
+    required: false
+    default: ${{ github.token }}
+outputs:
+  regressed:
+    description: '"true" when a route makes more calls per request than the baseline'
+    value: ${{ steps.run.outputs.regressed }}
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        TP_ARGS: ${{ inputs.run }}
+        TP_BASELINE: ${{ inputs.baseline }}
+        TP_VERSION: ${{ inputs.version }}
+      run: |
+        report="$RUNNER_TEMP/traceperf.md"
+        set +e
+        # shellcheck disable=SC2086 # the arguments are a word list on purpose
+        case "$TP_VERSION" in
+          # A local build (this repository's own CI tests the action with it)
+          ./*|/*) cli=(node "$TP_VERSION/dist/cli.js") ;;
+          *) cli=(npx --yes "traceperf@$TP_VERSION") ;;
+        esac
+        "${cli[@]}" run $TP_ARGS --baseline "$TP_BASELINE" --markdown "$report"
+        code=$?
+        set -e
+        if [ ! -s "$report" ]; then
+          printf '### traceperf: the run failed before it produced a report (exit %s)\n\nSee the job log.\n' "$code" > "$report"
+        fi
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        if [ "$code" -ne 0 ]; then echo "regressed=true" >> "$GITHUB_OUTPUT"; else echo "regressed=false" >> "$GITHUB_OUTPUT"; fi
+    - if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPORT: ${{ steps.run.outputs.report }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        # One comment per PR, updated on every push (found by its marker)
+        body="$(printf '<!-- traceperf-action -->\n%s' "$(cat "$REPORT")")"
+        id="$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[] | select(.body | startswith("<!-- traceperf-action -->")) | .id' | head -n 1)"
+        if [ -n "$id" ]; then
+          gh api --method PATCH "repos/$REPO/issues/comments/$id" -f body="$body" > /dev/null
+        else
+          gh api --method POST "repos/$REPO/issues/$PR/comments" -f body="$body" > /dev/null
+        fi
+    - if: inputs.fail == 'true' && steps.run.outputs.code != '0'
+      shell: bash
+      run: |
+        echo "traceperf: more calls per request than ${{ inputs.baseline }}, or the run failed (see the report above)"
+        exit 1

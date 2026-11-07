@@ -188,6 +188,40 @@ jobs:
     - run: node compat.js
       working-directory: test/compat
 
+  # The GitHub Action in action.yml, run against a local build: the batched
+  # app must pass its baseline, the N+1 version of it must fail.
+  action:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22.x
+    - uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist
+    - id: same
+      uses: ./
+      with:
+        run: examples/slow-apps/clean-batched/server.js --path /orders -n 30
+        baseline: examples/slow-apps/clean-batched/perf-baseline.json
+        version: ./
+        comment: 'false'
+    - id: nplus1
+      uses: ./
+      with:
+        run: examples/slow-apps/n-plus-one/server.js --path /orders -n 30
+        baseline: examples/slow-apps/clean-batched/perf-baseline.json
+        version: ./
+        comment: 'false'
+        fail: 'false'
+    - name: The batched app passed and the N+1 one was caught
+      run: |
+        test "${{ steps.same.outputs.regressed }}" = false
+        test "${{ steps.nplus1.outputs.regressed }}" = true
+
   # Bun and Deno run the ESM build (nesting, stats, exporters, browser entry).
   other-runtimes:
     needs: build
@@ -215,7 +249,7 @@ jobs:
       run: test/runtimes/workerd.sh
 
   publish-npm:
-    needs: [build, test, runtime, browser, driver-compat, other-runtimes]
+    needs: [build, test, runtime, browser, driver-compat, action, other-runtimes]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

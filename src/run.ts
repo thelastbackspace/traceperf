@@ -34,6 +34,8 @@ export interface RunArgs {
   /** Request headers, e.g. { authorization: 'Bearer ...' } */
   headers?: Record<string, string>;
   html?: string;
+  /** Write a Markdown summary here (pull-request comments, job summaries) */
+  markdown?: string;
   /** Write call counts per route here (a baseline for --baseline) */
   saveBaseline?: string;
   /** Compare call counts per route with this baseline; exit 1 on more calls or new problems */
@@ -65,6 +67,7 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --html out.html  write an HTML report
       --output f.jsonl keep the raw request trees
       --json           print stats and findings as JSON
+      --markdown f.md  write a Markdown summary (for a PR comment or job summary)
       --save-baseline f.json   save calls per request for each route (commit it)
       --baseline f.json        compare with it; exit 1 if a route makes more calls
                                (e.g. an N+1) or a new problem appears. Counts, not
@@ -252,6 +255,7 @@ function parseArgv(argv: string[], partial = false, start?: RunArgs): RunArgs | 
         break;
       }
       case '--json': args.json = true; break;
+      case '--markdown': if (!(args.markdown = argv[++i])) return '--markdown expects a file'; break;
       case '--save-baseline': if (!(args.saveBaseline = argv[++i])) return '--save-baseline expects a file'; break;
       case '--baseline': if (!(args.baseline = argv[++i])) return '--baseline expects a file'; break;
       case '--no-profile': args.profile = false; break;
@@ -856,6 +860,9 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   if (args.html && summary.trees) {
     fs.writeFileSync(args.html, deps.report(text, { html: true, findings: summary.findings, title: `traceperf run: ${args.command.join(' ')}` }));
   }
+  if (args.markdown) {
+    fs.writeFileSync(args.markdown, markdownReport({ load, findings: summary.findings, baseline: baselineReport, baselineFile: args.baseline, baselineError, trees: summary.trees || 0 }));
+  }
   if (args.json) {
     deps.out(JSON.stringify({ load, trees: summary.trees, findings: summary.findings, ...(baselineReport ? { baseline: baselineReport } : {}) }, null, 2));
   } else if (!summary.trees) {
@@ -885,6 +892,39 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   // Interactive runs end with Ctrl-C; that is success. A crash before any traffic is not.
   if (baselineError || (baselineReport && baselineReport.regressions.length)) return 1;
   return !summary.trees && exitCode ? 1 : 0;
+}
+
+/** A short Markdown summary for a pull-request comment or a CI job summary */
+export function markdownReport(r: {
+  load?: LoadResult; findings: Finding[]; trees: number;
+  baseline?: { regressions: string[]; improvements: string[]; notes: string[] }; baselineFile?: string; baselineError?: string;
+}): string {
+  const out: string[] = [];
+  const failed = !!r.baselineError || !!(r.baseline && r.baseline.regressions.length);
+  out.push(`### traceperf: ${failed ? '✖ more calls per request than the baseline' : r.baseline ? '✔ no new queries or calls' : `${r.findings.length ? `${r.findings.length} finding${r.findings.length === 1 ? '' : 's'}` : 'no issues found'}`}`, '');
+  if (r.baselineError) out.push(r.baselineError, '');
+  if (r.baseline) {
+    const { regressions, improvements, notes } = r.baseline;
+    for (const x of regressions) out.push(`- ✖ ${x}`);
+    for (const x of improvements) out.push(`- ✔ ${x}`);
+    for (const x of notes) out.push(`- ${x}`);
+    if (!regressions.length && !improvements.length) out.push('- ✔ same calls per request on every route');
+    out.push('', `<sub>Compared with \`${r.baselineFile}\`: calls per request from one-at-a-time requests, so the result does not depend on the machine.</sub>`, '');
+  }
+  if (r.findings.length) {
+    out.push('<details><summary>Why it was slow (timings from this CI machine)</summary>', '');
+    for (const f of r.findings) {
+      out.push(`- **${f.kind}**: ${f.message.replace(/\n/g, ' ')}`);
+      if (f.fix) out.push(`  - fix: ${f.fix}`);
+    }
+    out.push('', '</details>', '');
+  }
+  if (r.load) {
+    const rate = r.load.requests / Math.max(r.load.durationMs / 1000, 1e-3);
+    const statuses = Object.entries(r.load.statuses).map(([s, n]) => `${n}× ${s}`).join(', ');
+    out.push(`<sub>${r.load.requests} requests in ${(r.load.durationMs / 1000).toFixed(1)} s (${rate.toFixed(0)}/s)${statuses ? `, ${statuses}` : ''}; ${r.trees} request trees</sub>`);
+  }
+  return out.join('\n') + '\n';
 }
 
 function waitForPort(fs: any, file: string, exited: () => boolean, timeoutMs: number): Promise<number | undefined> {
