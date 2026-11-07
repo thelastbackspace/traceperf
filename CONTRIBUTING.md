@@ -94,9 +94,15 @@ traceperf/
 - Include examples for new features
 - Keep the README up to date
 
+## What to work on
+
+The focus is `traceperf run`, `explain`, `traceperf/auto`, the driver integrations and the CI baseline. Changes to findings need a case in `examples/slow-apps` (a planted problem, or a `clean-*` app where the right answer is "no issues") and `npm run eval` must stay at every problem found and no false alarms. Driver changes need a check in `test/compat` that runs old and new majors against real servers.
+
+The browser build, other runtimes, exporters and the decorator/logging APIs are in maintenance: bug fixes welcome, new features only when an issue asks for them.
+
 ## Release Process
 
-The maintainers will handle the release process, including:
+At most one release a week (regression fixes excepted), batching what has landed. The maintainers will handle the release process, including:
 
 1. Updating the version number
 2. Updating the changelog
