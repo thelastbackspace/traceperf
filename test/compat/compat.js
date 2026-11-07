@@ -10,8 +10,10 @@
 // TRACEPERF_COMPAT_STRICT=1 a skip is a failure).
 const assert = require('assert');
 const {
-  createTracePerf, instrumentPg, instrumentMysql2, instrumentMysql, instrumentMongo, instrumentRedis, instrumentBetterSqlite3,
+  createTracePerf, instrumentPg, instrumentMysql2, instrumentMysql, instrumentMongo, instrumentRedis, instrumentNodeRedis,
+  instrumentBetterSqlite3, instrumentPrisma,
 } = require('../../dist');
+const path = require('path');
 
 const env = {
   pg: process.env.TRACEPERF_PG_URL,
@@ -178,6 +180,110 @@ const redisCheck = pkg => async () => {
   }
 };
 
+const nodeRedisCheck = pkg => async () => {
+  const redis = require(pkg);
+  const client = redis.createClient({ url: env.redis, socket: { reconnectStrategy: false } });
+  client.on('error', () => undefined);
+  await client.connect();
+  const key = `traceperf:compat:${process.pid}`;
+  try {
+    const { labels, job } = await trace(tp => instrumentNodeRedis(tp, redis), async () => {
+      await client.set(key, 'v');
+      assert.strictEqual(await client.get(key), 'v');
+      assert.deepStrictEqual(await client.multi().incr(`${key}:n`).incr(`${key}:n`).exec(), [1, 2]);
+      await client.multi().get(key).execAsPipeline();
+      await client.sendCommand(['NOPE']).catch(() => undefined);
+      await client.del([key, `${key}:n`]);
+    });
+    // MULTI and pipeline commands are tracked one by one
+    assert.deepStrictEqual(labels, ['redis SET', 'redis GET', 'redis INCR', 'redis INCR', 'redis GET', 'redis NOPE', 'redis DEL']);
+    assert.ok(job.children[5].error, 'failed command is marked as an error');
+  } finally {
+    await client.disconnect();
+  }
+};
+
+// Each Prisma major lives in its own prisma<N>/ directory (see prisma-setup.js)
+const prismaCheck = dir => async () => {
+  const mod = require(path.join(__dirname, dir, 'node_modules', '@prisma/client'));
+  const prisma = new mod.PrismaClient({ datasources: { db: { url: `file:${path.join(__dirname, dir, 'compat.db')}` } } });
+  await prisma.$connect();
+  try {
+    await prisma.user.deleteMany();
+    const { labels, job } = await trace(tp => instrumentPrisma(tp, mod), async () => {
+      await prisma.user.create({ data: { name: 'ada' } });
+      assert.strictEqual((await prisma.user.findMany()).length, 1);
+      await prisma.user.findFirst({ where: { name: 'ada' } });
+      await prisma.user.update({ where: { id: -1 }, data: { name: 'x' } }).catch(() => undefined);
+      await prisma.$queryRaw`SELECT 1`;
+      await prisma.user.deleteMany();
+    });
+    assert.deepStrictEqual(labels, [
+      'prisma.User.create', 'prisma.User.findMany', 'prisma.User.findFirst', 'prisma.User.update',
+      'prisma.raw.queryRaw', 'prisma.User.deleteMany',
+    ]);
+    assert.ok(job.children[3].error, 'failed call is marked as an error');
+  } finally {
+    await prisma.$disconnect();
+  }
+};
+
+// Sequelize and Knex run on the instrumented drivers: their queries carry the driver's labels
+const SQL_SERVERS = {
+  pg: { url: () => env.pg, driver: 'pg8', instrument: instrumentPg, prefix: 'pg', knexDialect: 'postgres' },
+  mysql: { url: () => env.mysql, driver: 'mysql2-3', instrument: instrumentMysql2, prefix: 'mysql', knexDialect: 'mysql2' },
+};
+
+const sequelizeCheck = (pkg, server) => async () => {
+  const { Sequelize, DataTypes } = require(pkg);
+  const s = SQL_SERVERS[server];
+  const driver = require(s.driver);
+  const sequelize = new Sequelize(s.url(), { dialectModule: driver, logging: false, pool: { max: 1 } });
+  const table = `Users${process.pid}`;
+  const User = sequelize.define('User', { name: DataTypes.STRING }, { tableName: table });
+  try {
+    const { labels } = await trace(tp => s.instrument(tp, driver), async () => {
+      await User.sync({ force: true });
+    });
+    assert.ok(labels.includes(`${s.prefix} CREATE ${table}`), `CREATE TABLE IF NOT EXISTS is labelled by table: ${labels}`);
+    const { labels: crud } = await trace(tp => s.instrument(tp, driver), async () => {
+      const ada = await User.create({ name: 'ada' });
+      assert.strictEqual((await User.findAll({ where: { name: 'ada' } })).length, 1);
+      await User.update({ name: 'grace' }, { where: { id: ada.id } });
+      await User.destroy({ where: { id: ada.id } });
+    });
+    assert.deepStrictEqual(crud, ['INSERT', 'SELECT', 'UPDATE', 'DELETE'].map(v => `${s.prefix} ${v} ${table}`));
+  } finally {
+    await User.drop().catch(() => undefined);
+    await sequelize.close();
+  }
+};
+
+const knexCheck = (pkg, server) => async () => {
+  const s = SQL_SERVERS[server];
+  const driver = require(s.driver);
+  // Knex requires 'pg' / 'mysql2' by name; hand it the aliased driver instead
+  const Dialect = require(`${pkg}/lib/dialects/${s.knexDialect}`);
+  class Client extends Dialect { _driver() { return driver; } }
+  const knex = require(pkg)({ client: Client, connection: s.url(), pool: { min: 0, max: 1 } });
+  const table = `users${process.pid}`;
+  try {
+    await knex.raw('SELECT 1');   // connect first: pg runs "select version()" on a new connection
+    const { labels } = await trace(tp => s.instrument(tp, driver), async () => {
+      await knex.schema.createTable(table, t => { t.increments('id'); t.string('name'); });
+      await knex(table).insert({ name: 'ada' });
+      assert.strictEqual((await knex(table).where({ name: 'ada' })).length, 1);
+      await knex(table).where({ name: 'ada' }).update({ name: 'grace' });
+      await knex(table).del();
+      await knex.schema.dropTable(table);
+    });
+    assert.deepStrictEqual(labels, ['CREATE', 'INSERT', 'SELECT', 'UPDATE', 'DELETE', 'DROP'].map(v => `${s.prefix} ${v} ${table}`));
+  } finally {
+    await knex.schema.dropTableIfExists(table).catch(() => undefined);
+    await knex.destroy();
+  }
+};
+
 const sqliteCheck = pkg => async () => {
   const Database = require(pkg);
   const sqlite = new Database(':memory:');
@@ -212,6 +318,17 @@ const checks = [
   ['mongoose@8', 'mongo', mongooseCheck('mongoose8')],
   ['ioredis@4', 'redis', redisCheck('ioredis4')],
   ['ioredis@5', 'redis', redisCheck('ioredis5')],
+  ['redis@4', 'redis', nodeRedisCheck('redis4')],
+  ['redis@5', 'redis', nodeRedisCheck('redis5')],
+  ['prisma@5', null, prismaCheck('prisma5')],
+  ['prisma@6', null, prismaCheck('prisma6')],
+  // prisma@7: needs a driver adapter and the TypeScript-only generator for SQLite, see prisma-setup.js
+  ['sequelize@6 pg', 'pg', sequelizeCheck('sequelize6', 'pg')],
+  ['sequelize@6 mysql2', 'mysql', sequelizeCheck('sequelize6', 'mysql')],
+  ['knex@2 pg', 'pg', knexCheck('knex2', 'pg')],
+  ['knex@2 mysql2', 'mysql', knexCheck('knex2', 'mysql')],
+  ['knex@3 pg', 'pg', knexCheck('knex3', 'pg')],
+  ['knex@3 mysql2', 'mysql', knexCheck('knex3', 'mysql')],
   ['better-sqlite3@11', null, sqliteCheck('better-sqlite3-11')],
   ['better-sqlite3@12', null, sqliteCheck('better-sqlite3-12')],
 ];
@@ -246,7 +363,8 @@ process.on('exit', code => { if (!finished && code === 0) { console.log('FAIL  a
 })();
 
 function aliasOf(name) {
-  const [pkg, major] = name.split('@');
+  const [pkg, major] = name.split(' ')[0].split('@');
   if (name === 'pg@8.0') return 'pg8-0';
-  return ['pg', 'mongodb', 'mongoose', 'ioredis'].includes(pkg) ? `${pkg}${major}` : `${pkg}-${major}`;
+  if (pkg === 'prisma') return path.join(`..`, `prisma${major}`, 'node_modules', '@prisma', 'client');
+  return ['pg', 'mongodb', 'mongoose', 'ioredis', 'redis', 'sequelize', 'knex'].includes(pkg) ? `${pkg}${major}` : `${pkg}-${major}`;
 }

@@ -21,6 +21,7 @@ import {
   instrumentMysql,
   instrumentMysql2,
   instrumentPg,
+  instrumentNodeRedis,
   instrumentRedis,
   sqlLabel,
 } from '../index';
@@ -45,6 +46,12 @@ describe('sqlLabel', () => {
     [{ sql: 'select a from b join c' }, 'SELECT b'],
     ['SELECT "public"."Post"."id" FROM "public"."Post" WHERE 1', 'SELECT public.Post'],
     ['select * from `shop`.`orders`', 'SELECT shop.orders'],
+    ['CREATE TABLE IF NOT EXISTS "Users" ("id" SERIAL)', 'CREATE Users'],
+    ['DROP TABLE IF EXISTS `Users`', 'DROP Users'],
+    ['SELECT "id", "name" FROM "Users" AS "User" WHERE "User"."id" = 1', 'SELECT Users'],
+    ['INSERT INTO "Users" ("id","name") VALUES (DEFAULT,$1) RETURNING "id","name"', 'INSERT Users'],
+    ['select * from "users" where "name" = $1', 'SELECT users'],
+    ['create table `users` (`id` int unsigned not null auto_increment primary key)', 'CREATE users'],
     ['BEGIN', 'BEGIN'],
     [undefined, 'QUERY'],
   ])('%p -> %p', (sql, label) => {
@@ -167,6 +174,95 @@ describe('instrumentRedis (real ioredis client, local RESP server)', () => {
     const job = roots.find(r => r.label === 'job')!;
     expect(labels(job)).toEqual(['redis SET', 'redis GET', 'redis NOPE']);
     expect(job.children[2].error).toBeDefined();
+  });
+});
+
+/** A RESP2 server for SET/GET/INCR/MULTI/EXEC; other commands reply with an error */
+function fakeRedis(): Promise<{ server: net.Server; port: number }> {
+  return new Promise(resolve => {
+    const server = net.createServer(socket => {
+      const store = new Map<string, string>();
+      let queued: string[] | undefined;
+      let buffer = '';
+      const bulk = (v: string | undefined) => (v === undefined ? '$-1\r\n' : `$${Buffer.byteLength(v)}\r\n${v}\r\n`);
+      const reply = (cmd: string, key: string, value: string): string => {
+        switch (cmd) {
+          case 'SET': store.set(key, value); return '+OK\r\n';
+          case 'GET': return bulk(store.get(key));
+          case 'INCR': {
+            const n = Number(store.get(key) || 0) + 1;
+            store.set(key, String(n));
+            return `:${n}\r\n`;
+          }
+          default: return '-ERR unknown command\r\n';
+        }
+      };
+      socket.on('data', chunk => {
+        buffer += chunk.toString();
+        for (;;) {
+          const m = /^\*(\d+)\r\n/.exec(buffer);
+          if (!m) return;
+          let pos = m[0].length;
+          const parts: string[] = [];
+          for (let i = 0; i < Number(m[1]); i++) {
+            const len = /^\$(\d+)\r\n/.exec(buffer.slice(pos));
+            if (!len) return;
+            pos += len[0].length;
+            if (buffer.length < pos + Number(len[1]) + 2) return;
+            parts.push(buffer.slice(pos, pos + Number(len[1])));
+            pos += Number(len[1]) + 2;
+          }
+          buffer = buffer.slice(pos);
+          const [name, key, value] = parts;
+          const cmd = name.toUpperCase();
+          if (cmd === 'MULTI') { queued = []; socket.write('+OK\r\n'); continue; }
+          if (cmd === 'EXEC' && queued) {
+            socket.write(`*${queued.length}\r\n${queued.join('')}`);
+            queued = undefined;
+            continue;
+          }
+          const r = reply(cmd, key, value);
+          if (queued) { queued.push(r); socket.write('+QUEUED\r\n'); } else socket.write(r);
+        }
+      });
+    }).listen(0, '127.0.0.1', () => resolve({ server, port: (server.address() as AddressInfo).port }));
+  });
+}
+
+describe.each([['redis@5', 'redis'], ['redis@4', 'redis4']])('instrumentNodeRedis (real %s client, local RESP server)', (_name, pkg) => {
+  let server: net.Server;
+  let port: number;
+  beforeAll(async () => { ({ server, port } = await fakeRedis()); });
+  afterAll(done => { server.close(() => done()); });
+
+  test('commands, MULTI and pipeline commands are tracked individually, errors included', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const redis = require(pkg);
+    const { tp, roots } = setup();
+    const uninstall = instrumentNodeRedis(tp, redis);
+    const client = redis.createClient({ url: `redis://127.0.0.1:${port}`, socket: { reconnectStrategy: false } });
+    client.on('error', () => undefined);
+    try {
+      await client.connect();
+      await tp.track(async () => {
+        await client.set('k', 'v');
+        expect(await client.get('k')).toBe('v');
+        expect(await client.multi().incr('n').incr('n').exec()).toEqual([1, 2]);
+        await client.multi().get('k').execAsPipeline();
+        await expect(client.sendCommand(['NOPE'])).rejects.toThrow();
+      }, { label: 'job' });
+    } finally {
+      uninstall();
+      await client.disconnect();
+    }
+    const job = roots.find(r => r.label === 'job')!;
+    expect(labels(job)).toEqual(['redis SET', 'redis GET', 'redis INCR', 'redis INCR', 'redis GET', 'redis NOPE']);
+    expect(job.children[5].error).toBeDefined();
+  });
+
+  test('a module without createClient is ignored', () => {
+    const { tp } = setup();
+    expect(() => instrumentNodeRedis(tp, {})()).not.toThrow();
   });
 });
 

@@ -1,0 +1,9 @@
+{
+  "name": "traceperf-compat-prisma5",
+  "private": true,
+  "description": "Prisma 5 with a generated client and a SQLite database (installed by ../prisma-setup.js).",
+  "dependencies": {
+    "@prisma/client": "5",
+    "prisma": "5"
+  }
+}

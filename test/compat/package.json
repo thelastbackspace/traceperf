@@ -2,12 +2,16 @@
   "name": "traceperf-driver-compat",
   "private": true,
   "description": "Old and new majors of every instrumented driver, installed side by side under aliases. Run by compat.js against real servers.",
+  "scripts": {
+    "postinstall": "node prisma-setup.js"
+  },
   "dependencies": {
-    "pg8-0": "npm:pg@8.0.3",
-    "pg8": "npm:pg@8",
-    "mysql2-2": "npm:mysql2@2",
-    "mysql2-3": "npm:mysql2@3",
-    "mysql-2": "npm:mysql@2",
+    "better-sqlite3-11": "npm:better-sqlite3@11",
+    "better-sqlite3-12": "npm:better-sqlite3@12",
+    "ioredis4": "npm:ioredis@4",
+    "ioredis5": "npm:ioredis@5",
+    "knex2": "npm:knex@2",
+    "knex3": "npm:knex@3",
     "mongodb3": "npm:mongodb@3",
     "mongodb4": "npm:mongodb@4",
     "mongodb5": "npm:mongodb@5",
@@ -17,9 +21,13 @@
     "mongoose6": "npm:mongoose@6",
     "mongoose7": "npm:mongoose@7",
     "mongoose8": "npm:mongoose@8",
-    "ioredis4": "npm:ioredis@4",
-    "ioredis5": "npm:ioredis@5",
-    "better-sqlite3-11": "npm:better-sqlite3@11",
-    "better-sqlite3-12": "npm:better-sqlite3@12"
+    "mysql-2": "npm:mysql@2",
+    "mysql2-2": "npm:mysql2@2",
+    "mysql2-3": "npm:mysql2@3",
+    "pg8": "npm:pg@8",
+    "pg8-0": "npm:pg@8.0.3",
+    "redis4": "npm:redis@4",
+    "redis5": "npm:redis@5",
+    "sequelize6": "npm:sequelize@6"
   }
 }
