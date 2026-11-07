@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `traceperf/auto` wrote each request tree with its own `appendFileSync`, and under load that showed up as the app's "CPU cost" (`writeFileUtf8`). Writes are batched every 20 ms.
 
 ### Added
+- `traceperf run` reads `traceperf.config.json` (or `--config file`); command-line options win. A `login` step logs in before the traffic and sends the returned token or cookies with every request; `${NAME}` in the file is read from the environment.
 - `npm run eval` scores `traceperf run` on 20 apps in `examples/slow-apps`: 12 with a planted problem, 8 clean ones where the right answer is "no issues". CI fails on any missed problem or false alarm. Before these fixes: 17/17 found, 15 false alarms; after: 17/17, 0.
 
 ### Added

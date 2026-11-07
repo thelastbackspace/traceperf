@@ -105,6 +105,25 @@ Checked on real apps, not only on the planted ones: Prisma's REST example, the R
 - `--warmup 3`: untimed requests per path first, so cold-start work doesn't look like a problem.
 - `--no-profile`: don't sample the CPU.
 - Any start command works: `npx traceperf run -- npm start`.
+- `--config file.json`: read the options from a file (`traceperf.config.json` is read automatically when present). Options given on the command line win.
+
+**Config file and login.** Put the routes in `traceperf.config.json` so the command is just `npx traceperf run`. A `login` step runs once before the traffic, and its token (or cookie) is sent with every request, so an expired token can't silently turn the run into a benchmark of 401 pages. `${NAME}` is read from the environment:
+
+<!-- docs:skip -->
+```json
+{
+  "app": "dist/server.js",
+  "paths": ["/api/articles", "/api/user"],
+  "login": {
+    "path": "/api/users/login",
+    "body": { "user": { "email": "${TEST_EMAIL}", "password": "${TEST_PASSWORD}" } },
+    "token": "user.token",
+    "prefix": "Token "
+  }
+}
+```
+
+`token` is the dotted path of the token in the JSON response, sent as `authorization: Bearer <token>` unless `header` / `prefix` say otherwise. Leave `token` out to use the cookies the login sets. `method` defaults to POST.
 
 ### In CI: fail a PR that adds queries
 
@@ -130,7 +149,7 @@ It fails when a route makes more calls of any kind per request (database queries
 - run: npx traceperf run dist/server.js --path /orders --path /users/1 --baseline perf-baseline.json
 ```
 
-`examples/slow-apps/` has small apps with one planted problem each (blocking in your code, blocking in built-ins, sequential awaits, N+1, a slow dependency, errors); CI checks that `run` names each one.
+`examples/slow-apps/` has 20 small apps: 12 with one planted problem each (blocking in your code and in built-ins, sequential awaits, N+1 over SQL and over HTTP, a slow or flaky dependency, failing requests…) and 8 clean ones where the right answer is "no issues". `npm run eval` scores `run` on them, and CI fails on a missed problem or a false alarm.
 
 The same naming works without `run`: `TRACEPERF_PROFILE_BLOCKING=1 node --require traceperf/auto server.js` adds the function names to the exit summary (sampling costs a few percent CPU, so use it while investigating). In code: `profileSlowCalls({ select: root => blockingRanges(root), mergeInlined: true, onProfile })`, then `explain(roots, { hotspots })`.
 
