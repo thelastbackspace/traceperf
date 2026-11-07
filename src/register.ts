@@ -52,7 +52,26 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
     ...(sampleRate !== undefined ? { sampleRate } : {}),
   });
   if (output && fs) {
-    tracePerf.use(jsonLinesExporter(line => fs.appendFileSync(output, line + '\n')));
+    // Batched: one appendFileSync per request (open, write, close) cost more CPU than
+    // many apps' own handlers and showed up as their "CPU cost" under load
+    let pending: string[] = [];
+    const flush = () => {
+      if (!pending.length) return;
+      const text = pending.join('');
+      pending = [];
+      try {
+        fs.appendFileSync(output, text);
+      } catch {
+        // reporting must never break the app
+      }
+    };
+    const timer = setInterval(flush, 20);
+    if (typeof timer.unref === 'function') timer.unref();
+    process.on('exit', flush);
+    tracePerf.use(jsonLinesExporter(line => {
+      pending.push(line + '\n');
+      if (pending.length >= 500) flush();
+    }));
   }
 
   // Keep the most recent trees for the exit summary

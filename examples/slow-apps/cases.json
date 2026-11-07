@@ -76,12 +76,143 @@
       },
       {
         "kind": "blocking",
-        "includes": "hashPassword → pbkdf2Sync"
+        "includes": "hashPassword \u2192 pbkdf2Sync"
       },
       {
         "kind": "blocked",
         "includes": "GET /ping took"
       }
     ]
+  },
+  "http-n-plus-one": {
+    "paths": [
+      "/products"
+    ],
+    "expect": [
+      {
+        "kind": "repeated",
+        "includes": "10 times"
+      }
+    ],
+    "allow": [
+      {
+        "kind": "busy",
+        "includes": ""
+      }
+    ],
+    "note": "10 fetch() calls per request really cost ~10-20 ms of CPU (undici), so the busy finding is true; the case is about the N+1"
+  },
+  "parallel-n-plus-one": {
+    "paths": [
+      "/team"
+    ],
+    "expect": [
+      {
+        "kind": "repeated",
+        "includes": "SELECT * FROM avatars WHERE user_id = ? 15 times"
+      }
+    ]
+  },
+  "blocking-zlib": {
+    "paths": [
+      "/backup",
+      "/health"
+    ],
+    "expect": [
+      {
+        "kind": "blocking",
+        "includes": "GET /backup"
+      },
+      {
+        "kind": "blocked",
+        "includes": "GET /health"
+      }
+    ]
+  },
+  "cpu-json": {
+    "paths": [
+      "/catalogue"
+    ],
+    "expect": [
+      {
+        "kind": [
+          "blocking",
+          "busy"
+        ],
+        "includes": "cpu-json/server.js:9"
+      }
+    ],
+    "note": "~8-15 ms of JSON per request: blocking on a slow machine, CPU cost (busy) on a fast one; either is right if it names the function"
+  },
+  "failing-route": {
+    "paths": [
+      "/invoices"
+    ],
+    "expect": [
+      {
+        "kind": "error",
+        "includes": "500"
+      }
+    ]
+  },
+  "flaky-dependency": {
+    "paths": [
+      "/quote"
+    ],
+    "expect": [
+      {
+        "kind": "dominant",
+        "includes": "shipping.example/quote"
+      }
+    ]
+  },
+  "clean-crud": {
+    "paths": [
+      "/user"
+    ],
+    "expect": []
+  },
+  "clean-batched": {
+    "paths": [
+      "/orders"
+    ],
+    "expect": []
+  },
+  "clean-parallel": {
+    "paths": [
+      "/dashboard"
+    ],
+    "expect": []
+  },
+  "clean-auth-middleware": {
+    "paths": [
+      "/profile",
+      "/settings"
+    ],
+    "expect": []
+  },
+  "clean-dependent": {
+    "paths": [
+      "/billing"
+    ],
+    "expect": []
+  },
+  "clean-cached": {
+    "paths": [
+      "/config"
+    ],
+    "expect": []
+  },
+  "clean-static": {
+    "paths": [
+      "/about"
+    ],
+    "expect": []
+  },
+  "clean-fast-loop": {
+    "paths": [
+      "/flags"
+    ],
+    "expect": []
   }
 }

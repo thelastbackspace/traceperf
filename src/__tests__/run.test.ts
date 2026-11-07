@@ -133,7 +133,7 @@ describe('explain on a known N+1 tree', () => {
   });
 });
 
-const cases: Record<string, { paths: string[]; expect: Array<{ kind: string; includes: string }> }> =
+const cases: Record<string, { paths: string[]; expect: Array<{ kind: string | string[]; includes: string }> }> =
   JSON.parse(fs.readFileSync(path.join(APPS, 'cases.json'), 'utf8'));
 
 describe('known-slow example apps: explain names the planted cause', () => {
@@ -147,7 +147,7 @@ describe('known-slow example apps: explain names the planted cause', () => {
     const result = JSON.parse(out.join('\n'));
     expect(result.trees).toBeGreaterThan(5);
     for (const e of c.expect) {
-      const hit = result.findings.find((f: any) => f.kind === e.kind && f.message.includes(e.includes));
+      const hit = result.findings.find((f: any) => ([] as string[]).concat(e.kind).includes(f.kind) && f.message.includes(e.includes));
       if (!hit) throw new Error(`${name}: no ${e.kind} finding containing "${e.includes}"; got:\n${result.findings.map((f: any) => `${f.kind}: ${f.message}`).join('\n')}`);
     }
   }, 30000);

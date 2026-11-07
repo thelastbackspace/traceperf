@@ -152,10 +152,10 @@ describe('explain()', () => {
     // ... and once in 40 requests is noise
     const many = [110, ...Array(39).fill(4)].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
     expect(explain(many).filter(f => f.kind === 'dominant')).toEqual([]);
-    const slowRoots = [110, 40, 42, 41, 39].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
+    const slowRoots = [110, 60, 62, 61, 59].map(ms => node('GET /users', 0, ms + 1, { selfDuration: 0.5, children: [node('db', 0, ms), node('auth', ms, 0.5)] }));
     const [f] = explain(slowRoots).filter(x => x.kind === 'dominant');
-    expect(f.ms).toBe(41);
-    expect(f.message).toMatch(/\(41 ms of 42 ms\) \(seen 5 times, typical shown; worst 110 ms\)$/);
+    expect(f.ms).toBe(61);
+    expect(f.message).toMatch(/\(61 ms of 62 ms\) \(seen 5 times, typical shown; worst 110 ms\)$/);
   });
 
   test('nothing to say', () => {

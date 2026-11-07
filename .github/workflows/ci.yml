@@ -52,6 +52,8 @@ jobs:
     - name: Type-check sources and tests
       run: npm run typecheck
     - run: npm test
+    - name: Score traceperf run on 20 apps (planted problems found, no false alarms)
+      run: npm run eval
     - name: Package lint (publint + are-the-types-wrong)
       run: npm run lint:package
     - name: Install the tarball into fresh CJS/ESM/TypeScript/bundler projects

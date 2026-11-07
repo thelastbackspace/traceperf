@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (found by the new evaluation set)
+- `run` reported each of several `Promise.all` calls as "dominant" (each spans most of the request). Parallel calls are no longer dominant, and a dominant call must take at least 50 ms (`dominantMinMs`).
+- Blocking code was reported three times: as blocking, as its own route queueing, and as the process being busy. Only the bystanders that waited behind it are listed now.
+- `traceperf/auto` wrote each request tree with its own `appendFileSync`, and under load that showed up as the app's "CPU cost" (`writeFileUtf8`). Writes are batched every 20 ms.
+
+### Added
+- `npm run eval` scores `traceperf run` on 20 apps in `examples/slow-apps`: 12 with a planted problem, 8 clean ones where the right answer is "no issues". CI fails on any missed problem or false alarm. Before these fixes: 17/17 found, 15 false alarms; after: 17/17, 0.
+
 ### Added
 - **node-redis:** `instrumentNodeRedis(tp, require('redis'))` for `redis` / `@redis/client` 4 and 5: `redis GET`, `redis HSET`; MULTI and pipeline commands are tracked one by one. Auto-instrumented as the `redis` target.
 
