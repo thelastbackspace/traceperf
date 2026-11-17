@@ -90,7 +90,7 @@ function trackCall(
 
 /** A SQL statement as the app sent it, with a way to run another statement on the same database */
 export interface ObservedSql {
-  driver: 'pg';
+  driver: 'pg' | 'mysql';
   text: string;
   values?: unknown[];
   /** Runs a statement on the pool the app used (or the client, when it has no pool) */
@@ -146,6 +146,14 @@ function patchPoolAcquire(
     if (!full) return original.apply(this, bound);
     return trackCall(tp, label, options, this, original, bound, typeof bound[bound.length - 1] === 'function' ? bound.length - 1 : -1);
   }, restores);
+}
+
+/** The prototype in the chain that defines `name` itself (subclasses inherit the patch from it) */
+function definingPrototype(proto: any, name: string): any {
+  for (let p = proto, depth = 0; p && p !== Object.prototype && depth < 10; p = Object.getPrototypeOf(p), depth++) {
+    if (Object.prototype.hasOwnProperty.call(p, name)) return p;
+  }
+  return proto;
 }
 
 function patchMethod(target: any, name: string, makePatched: (original: Function) => Function, restores: Uninstall[]): void {
@@ -227,14 +235,36 @@ export function instrumentPg(tp: OptimizedPerformanceMonitor, pg: any, options: 
  */
 export function instrumentMysql2(tp: OptimizedPerformanceMonitor, mysql2: any, options: DriverOptions = {}): Uninstall {
   const restores: Uninstall[] = [];
+  // mysql2 >= 3.10 defines these on BaseConnection, which PoolConnection also extends
+  // (patching Connection.prototype alone missed every pooled query)
   const proto = mysql2 && mysql2.Connection && mysql2.Connection.prototype;
   for (const method of ['query', 'execute']) {
-    patchMethod(proto, method, original => function (this: unknown, ...args: unknown[]) {
+    patchMethod(definingPrototype(proto, method), method, original => function (this: any, ...args: unknown[]) {
+      const first = args[0] as any;
+      const text = typeof first === 'string' ? first : first && typeof first.sql === 'string' ? first.sql : undefined;
+      // traceperf's own statements (the index check) are not the app's
+      if (text !== undefined && text.startsWith(OWN_SQL)) return original.apply(this, args);
+      if (sqlObserver && text !== undefined) {
+        const values = Array.isArray(args[1]) ? args[1] : first && Array.isArray(first.values) ? first.values : undefined;
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        const connection = this;
+        try {
+          sqlObserver({
+            driver: 'mysql', text, values,
+            // On the connection the app used (pooled connections stay open until the pool ends)
+            run: (sql, vals) => new Promise<any[]>((resolve, reject) => {
+              connection.query(OWN_SQL + sql, vals || [], (error: unknown, rows: any) => (error ? reject(error) : resolve(Array.isArray(rows) ? rows : [])));
+            }),
+          });
+        } catch {
+          // observing must never break the query
+        }
+      }
       return trackCall(tp, `mysql ${sqlLabel(args[0])}`, options, this, original, args);
     }, restores);
   }
   // pool.query and pool.execute get a connection through getConnection(cb)
-  patchPoolAcquire(tp, mysql2 && mysql2.Pool && mysql2.Pool.prototype, 'getConnection', 'mysql pool wait',
+  patchPoolAcquire(tp, definingPrototype(mysql2 && mysql2.Pool && mysql2.Pool.prototype, 'getConnection'), 'getConnection', 'mysql pool wait',
     pool => pool._allConnections.length >= pool.config.connectionLimit && pool._freeConnections.length === 0, options, restores);
   return () => restores.forEach(r => r());
 }
@@ -349,6 +379,27 @@ const redisName = (args: unknown): string => {
 };
 
 /** The prototype that defines a node-redis client's sendCommand (RedisClient) */
+const LEGACY_WRAPPED = Symbol.for('traceperf.redisLegacy');
+
+/** node-redis v4 with legacyMode: true (callbacks, commands defined on the instance) */
+function wrapLegacyNodeRedis(tp: OptimizedPerformanceMonitor, client: any, options: DriverOptions): void {
+  if (!client || !client.v4 || client[LEGACY_WRAPPED] || !Object.prototype.hasOwnProperty.call(client, 'sendCommand')) return;
+  const send = client.sendCommand;
+  if (typeof send !== 'function') return;
+  client[LEGACY_WRAPPED] = true;
+  client.sendCommand = function (this: any, ...args: unknown[]) {
+    const first = args[0];
+    const name = Array.isArray(first) ? first : [first];
+    const label = `redis ${redisName(name)}`;
+    if (typeof args[args.length - 1] === 'function') return trackCall(tp, label, options, this, send, args);
+    // No callback (fire and forget): add one to see the reply, and report errors as it would have
+    const emit = (error: unknown) => this.emit('error', error);
+    return trackCall(tp, label, options, this, send, [...args, (error: unknown) => {
+      if (error) emit(error);
+    }]);
+  };
+}
+
 function nodeRedisPrototype(redis: any): any {
   if (!redis || typeof redis.createClient !== 'function') return undefined;
   let client: any;
@@ -422,6 +473,16 @@ export function instrumentNodeRedis(tp: OptimizedPerformanceMonitor, redis: any,
   }, restores);
   patchMethod(proto, 'executeFunction', original => function (this: unknown, ...args: unknown[]) {
     return trackCall(tp, 'redis FCALL', options, this, original, args, -1);
+  }, restores);
+  // v4 legacyMode: every legacy command is `this.sendCommand(name, ...args, callback?)` on
+  // an own property of the client, set in its constructor: wrap it when the client connects
+  patchMethod(proto, 'connect', original => function (this: any, ...args: unknown[]) {
+    try {
+      wrapLegacyNodeRedis(tp, this, options);
+    } catch {
+      // never break connecting
+    }
+    return original.apply(this, args);
   }, restores);
   // MULTI / pipeline: v4 multiExecutor, v5 _executeMulti and _executePipeline
   for (const method of ['multiExecutor', '_executeMulti', '_executePipeline']) {

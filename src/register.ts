@@ -21,6 +21,7 @@
  *   TRACEPERF_PROFILE_OUTPUT=f     with it, append those profiles as JSON lines
  *   TRACEPERF_LOAD_OUTPUT=f        append event-loop / CPU use each second (and,
  *                                  when profiling, where the CPU went) as JSON lines
+ *   TRACEPERF_TEST=1               also track drivers Jest loads into its test sandboxes
  *   TRACEPERF_ENABLED=0            load nothing
  */
 import './node-builtins'; // must stay first: see node-builtins.ts
@@ -31,7 +32,9 @@ import { BlockingProfileEntry, blockingHotspots, profileSlowCalls, SlowCallProfi
 import { jsonLinesExporter } from './core/exporters';
 import { loadNodeBuiltin } from './core/env';
 import { observeSql, ObservedSql } from './drivers';
-import { seqScans } from './core/sql-plan';
+import { mysqlFullScans, seqScans } from './core/sql-plan';
+import { hookJest } from './test-runners';
+import { serverRoutes } from './routes';
 import type { ExecutionRecord } from './core/records';
 
 const env: Record<string, string | undefined> = (typeof process !== 'undefined' && process.env) || {};
@@ -70,9 +73,11 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
     const timer = setInterval(flush, 20);
     if (typeof timer.unref === 'function') timer.unref();
     process.on('exit', flush);
+    // Test runners stop their workers without a normal exit (no 'exit' event): write each tree at once
+    const immediate = flag(env.TRACEPERF_TEST, false);
     tracePerf.use(jsonLinesExporter(line => {
       pending.push(line + '\n');
-      if (pending.length >= 500) flush();
+      if (immediate || pending.length >= 500) flush();
     }));
   }
 
@@ -121,16 +126,21 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
       (async () => {
         for (const [text, { count, sample }] of top) {
           try {
-            const rows = await sample.run(`EXPLAIN (FORMAT JSON) ${text}`, sample.values);
-            const plan = rows[0] && (rows[0]['QUERY PLAN'] ?? Object.values(rows[0])[0]);
-            const scans = seqScans(typeof plan === 'string' ? JSON.parse(plan) : plan);
+            const mysql = sample.driver === 'mysql';
+            const rows = await sample.run(mysql ? `EXPLAIN FORMAT=JSON ${text}` : `EXPLAIN (FORMAT JSON) ${text}`, sample.values);
+            const plan = rows[0] && (rows[0]['QUERY PLAN'] ?? rows[0].EXPLAIN ?? Object.values(rows[0])[0]);
+            const parsed = typeof plan === 'string' ? JSON.parse(plan) : plan;
+            const scans = mysql ? mysqlFullScans(parsed) : seqScans(parsed);
             for (const scan of scans) {
-              if (!sizes.has(scan.table)) {
-                const r = await sample.run('SELECT reltuples::bigint AS n FROM pg_class WHERE oid = to_regclass($1)', [scan.table]).catch(() => []);
-                sizes.set(scan.table, Number(r[0] && r[0].n) || 0);
+              const key = `${sample.driver} ${scan.table}`;
+              if (!sizes.has(key)) {
+                const r = await (mysql
+                  ? sample.run('SELECT TABLE_ROWS AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [scan.table])
+                  : sample.run('SELECT reltuples::bigint AS n FROM pg_class WHERE oid = to_regclass($1)', [scan.table])).catch(() => []);
+                sizes.set(key, Number(r[0] && r[0].n) || 0);
               }
             }
-            if (scans.length) lines.push(JSON.stringify({ driver: sample.driver, text, count, scans: scans.map(x => ({ ...x, tableRows: sizes.get(x.table) || 0 })) }));
+            if (scans.length) lines.push(JSON.stringify({ driver: sample.driver, text, count, scans: scans.map(x => ({ ...x, tableRows: sizes.get(`${sample.driver} ${x.table}`) || 0 })) }));
           } catch {
             // a statement EXPLAIN can't take (parameters it can't infer, permissions): skip it
           }
@@ -218,8 +228,12 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
     process.stderr.write(`traceperf: tracking ${instrumented.join(', ') || 'nothing'}${output ? ` -> ${output}` : ''}\n`);
   }
 
-  // `traceperf run` learns the app's port from this file
+  // `traceperf test`: Jest loads drivers into per-file sandboxes; track those copies too
+  if (flag(env.TRACEPERF_TEST, false)) hookJest(tracePerf);
+
+  // `traceperf run` learns the app's port from this file (and, with --routes, its routes from the other)
   const readyFile = env.TRACEPERF_READY_FILE;
+  const routesFile = env.TRACEPERF_ROUTES_OUTPUT;
   const http = readyFile && fs ? loadNodeBuiltin('http') : undefined;
   if (http && readyFile) {
     const listen = http.Server.prototype.listen;
@@ -228,6 +242,8 @@ if (flag(env.TRACEPERF_ENABLED, true) && !g[AUTO_KEY]) {
         const address = this.address();
         if (address && typeof address === 'object' && !fs.existsSync(readyFile)) {
           try {
+            // Routes first: run reads them as soon as the port appears
+            if (routesFile) fs.writeFileSync(routesFile, JSON.stringify(serverRoutes(this)));
             fs.writeFileSync(readyFile, String(address.port));
           } catch {
             // the run command will time out and say so

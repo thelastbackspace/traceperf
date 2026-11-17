@@ -238,6 +238,22 @@ const nodeRedisCheck = pkg => async () => {
   } finally {
     await client.disconnect();
   }
+  // Callback-style clients: v4 createClient({ legacyMode: true }), v5 client.legacy()
+  const v4 = pkg.endsWith('4');
+  const base = redis.createClient({ url: env.redis, socket: { reconnectStrategy: false }, ...(v4 ? { legacyMode: true } : {}) });
+  base.on('error', () => undefined);
+  const { labels, job } = await trace(tp => instrumentNodeRedis(tp, redis), async () => {
+    await base.connect();
+    const legacy = v4 ? base : base.legacy();
+    const call = (...args) => new Promise((resolve, reject) => legacy[args[0]](...args.slice(1), (e, r) => (e ? reject(e) : resolve(r))));
+    await call('set', key, 'v');
+    assert.strictEqual(await call('get', key), 'v');
+    await new Promise(resolve => legacy.sendCommand('NOPE', () => resolve()));
+    await call('del', key);
+  });
+  assert.deepStrictEqual(labels.filter(l => l.startsWith('redis ') && !/CLIENT|HELLO|SELECT|PING/.test(l)), ['redis SET', 'redis GET', 'redis NOPE', 'redis DEL']);
+  assert.ok(job.children.find(c => c.label === 'redis NOPE').error, 'failed legacy command is marked as an error');
+  await (v4 ? base.v4.quit() : base.quit());
 };
 
 // Each Prisma major lives in its own prisma<N>/ directory (see prisma-setup.js)
@@ -248,6 +264,79 @@ const prismaCheck = dir => async () => {
   try {
     await prisma.user.deleteMany();
     const { labels, job } = await trace(tp => instrumentPrisma(tp, mod), async () => {
+      await prisma.user.create({ data: { name: 'ada' } });
+      assert.strictEqual((await prisma.user.findMany()).length, 1);
+      await prisma.user.findFirst({ where: { name: 'ada' } });
+      await prisma.user.update({ where: { id: -1 }, data: { name: 'x' } }).catch(() => undefined);
+      await prisma.$queryRaw`SELECT 1`;
+      await prisma.user.deleteMany();
+    });
+    assert.deepStrictEqual(labels, [
+      'prisma.User.create', 'prisma.User.findMany', 'prisma.User.findFirst', 'prisma.User.update',
+      'prisma.raw.queryRaw', 'prisma.User.deleteMany',
+    ]);
+    assert.ok(job.children[3].error, 'failed call is marked as an error');
+  } finally {
+    await prisma.$disconnect();
+  }
+};
+
+// traceperf run's index check on MySQL / MariaDB: the statement the app sent is
+// EXPLAINed (FORMAT=JSON) on its own connection, and the full scan is read
+const mysqlExplainCheck = (pkg, server) => async () => {
+  const mysql = require(pkg);
+  const { observeSql } = require('../../dist/drivers');
+  const { mysqlFullScans } = require('../../dist/core/sql-plan');
+  const pool = mysql.createPool({ uri: env[server], connectionLimit: 2 });
+  const table = `tp_explain_${process.pid}`;
+  try {
+    await pool.promise().query(`CREATE TABLE ${table} (id INT AUTO_INCREMENT PRIMARY KEY, customer_id INT, total INT)`);
+    const values = Array.from({ length: 2000 }, (_, i) => [i % 200, i]);
+    await pool.promise().query(`INSERT INTO ${table} (customer_id, total) VALUES ?`, [values]);
+    await pool.promise().query(`ANALYZE TABLE ${table}`);
+    const seen = [];
+    await trace(tp => instrumentMysql2(tp, mysql), async () => {
+      observeSql(q => seen.push(q));
+      try {
+        await pool.promise().execute(`SELECT * FROM ${table} WHERE customer_id = ?`, [7]);
+      } finally {
+        observeSql(undefined);
+      }
+    });
+    const q = seen.find(x => x.text.includes(table));
+    assert.ok(q, 'the SELECT was observed');
+    assert.strictEqual(q.driver, 'mysql');
+    const rows = await q.run(`EXPLAIN FORMAT=JSON ${q.text}`, q.values);
+    const plan = rows[0] && (rows[0].EXPLAIN ?? Object.values(rows[0])[0]);
+    const scans = mysqlFullScans(typeof plan === 'string' ? JSON.parse(plan) : plan);
+    assert.deepStrictEqual(scans.map(x => [x.table, x.columns]), [[table, ['customer_id']]], JSON.stringify(plan));
+    assert.ok(scans[0].examined >= 1000, `examined ${scans[0].examined}`);
+    const size = await q.run('SELECT TABLE_ROWS AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [table]);
+    assert.ok(Number(size[0].n) > 1000, `TABLE_ROWS ${size[0] && size[0].n}`);
+  } finally {
+    await pool.promise().query(`DROP TABLE IF EXISTS ${table}`).catch(() => undefined);
+    await pool.promise().end();
+  }
+};
+
+// Prisma 7: a driver adapter instead of the engine, and a generated TypeScript client
+const prisma7Check = async () => {
+  const dir = path.join(__dirname, 'prisma7');
+  const { register } = require(path.join(dir, 'node_modules', 'tsx', 'dist', 'cjs', 'api', 'index.cjs'));
+  const unregister = register();
+  let prisma;
+  try {
+    const { PrismaClient } = require(path.join(dir, 'generated', 'client.ts'));
+    const { PrismaBetterSqlite3 } = require(path.join(dir, 'node_modules', '@prisma', 'adapter-better-sqlite3'));
+    prisma = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: `file:${path.join(dir, 'compat.db')}` }) });
+  } finally {
+    unregister();
+  }
+  await prisma.$connect();
+  try {
+    await prisma.user.deleteMany();
+    // @prisma/client itself doesn't load in Prisma 7 (the client is generated elsewhere), as in traceperf/auto
+    const { labels, job } = await trace(tp => instrumentPrisma(tp, undefined), async () => {
       await prisma.user.create({ data: { name: 'ada' } });
       assert.strictEqual((await prisma.user.findMany()).length, 1);
       await prisma.user.findFirst({ where: { name: 'ada' } });
@@ -343,7 +432,11 @@ const checks = [
   ['pg@8', 'pg', pgCheck('pg8')],
   ['mysql2@2', 'mysql', mysql2Check('mysql2-2')],
   ['mysql2@3', 'mysql', mysql2Check('mysql2-3')],
+  // 3.10-3.11: PoolConnection extends BaseConnection, not Connection (pooled queries went untracked)
+  ['mysql2@3.11', 'mysql', mysql2Check('mysql2-311')],
   ['mysql@2', 'mariadb', mysqlCheck('mysql-2')],
+  ['mysql2@3 EXPLAIN mysql', 'mysql', mysqlExplainCheck('mysql2-3', 'mysql')],
+  ['mysql2@3 EXPLAIN mariadb', 'mariadb', mysqlExplainCheck('mysql2-3', 'mariadb')],
   ['mongodb@3', 'mongo', mongoCheck('mongodb3', { callbacks: true })],
   ['mongodb@4', 'mongo', mongoCheck('mongodb4')],
   ['mongodb@5', 'mongo', mongoCheck('mongodb5')],
@@ -359,7 +452,7 @@ const checks = [
   ['redis@5', 'redis', nodeRedisCheck('redis5')],
   ['prisma@5', null, prismaCheck('prisma5')],
   ['prisma@6', null, prismaCheck('prisma6')],
-  // prisma@7: needs a driver adapter and the TypeScript-only generator for SQLite, see prisma-setup.js
+  ['prisma@7', null, prisma7Check],
   ['sequelize@6 pg', 'pg', sequelizeCheck('sequelize6', 'pg')],
   ['sequelize@6 mysql2', 'mysql', sequelizeCheck('sequelize6', 'mysql')],
   ['knex@2 pg', 'pg', knexCheck('knex2', 'pg')],
@@ -402,6 +495,7 @@ process.on('exit', code => { if (!finished && code === 0) { console.log('FAIL  a
 function aliasOf(name) {
   const [pkg, major] = name.split(' ')[0].split('@');
   if (name === 'pg@8.0') return 'pg8-0';
+  if (name === 'mysql2@3.11') return 'mysql2-311';
   if (pkg === 'prisma') return path.join(`..`, `prisma${major}`, 'node_modules', '@prisma', 'client');
   return ['pg', 'mongodb', 'mongoose', 'ioredis', 'redis', 'sequelize', 'knex'].includes(pkg) ? `${pkg}${major}` : `${pkg}-${major}`;
 }

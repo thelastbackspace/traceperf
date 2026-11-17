@@ -81,6 +81,11 @@ export interface ExplainOptions {
    * blockingRanges(): blocking findings then name the function that ran.
    */
   hotspots?: Record<string, BlockingHotspot[]>;
+  /**
+   * The app's dependencies (package.json names), so N+1 advice can name the
+   * fix in the ORM it uses: e.g. ['sequelize'] gives `include` / `Op.in`.
+   */
+  libraries?: string[];
 }
 
 const fmt = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(ms < 10 ? 1 : 0)} ms`);
@@ -425,7 +430,7 @@ export function explain(roots: ExplainNode[], options: ExplainOptions = {}): Fin
       let { times, roots: seenIn, group, all, ...f } = g;
       const where = [...seenIn];
       const label = where.length > 3 ? `${where.slice(0, 3).join(', ')} and ${where.length - 3} more` : where.join(', ');
-      const fix = suggestFix(f, options.hotspots, medians);
+      const fix = suggestFix(f, options.hotspots, medians, options.libraries);
       if (fix) f = { ...f, fix };
       if (f.kind === 'blocking') {
         const self = where.length === 1 && where[0] === f.message.split(' ran ')[0];
@@ -454,7 +459,37 @@ const LIBRARY_CALL = /^(prisma\.|(pg|mysql|sqlite|mongo|redis|aws) )/;
 const SQL = /\b(select|insert|update|delete|pg|mysql|postgres|sql|query|prisma|knex|sequelize|typeorm|drizzle)\b/i;
 
 /** A concrete change for a finding, from its kind, labels and CPU hotspots */
-function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, medians?: Map<string, number>): string | undefined {
+/** The N+1 fix in the words of the ORM the app uses (first match wins: an ORM over its driver) */
+const ORM_BATCH: Array<[string, string]> = [
+  ['sequelize', 'in Sequelize: include the association in the parent query (findAll({ include: [Model] })), or findAll({ where: { id: { [Op.in]: ids } } })'],
+  ['typeorm', 'in TypeORM: load the relation with the parent (relations: [...] or leftJoinAndSelect), or findBy({ id: In(ids) })'],
+  ['@mikro-orm/core', 'in MikroORM: populate the relation (populate: [...]), or find({ id: { $in: ids } })'],
+  ['drizzle-orm', 'in Drizzle: db.query with { with: { ... } }, or where(inArray(table.id, ids))'],
+  ['objection', 'in Objection: withGraphFetched(...) on the parent query, or whereIn("id", ids)'],
+  ['kysely', 'in Kysely: where("id", "in", ids)'],
+  ['knex', 'in Knex: whereIn("id", ids)'],
+  ['bookshelf', 'in Bookshelf: withRelated: [...] on the parent fetch'],
+];
+
+export function batchAdvice(label: string, libraries: string[] = []): string {
+  const has = (name: string) => libraries.includes(name);
+  if (/^prisma\./.test(label)) return `load them in one call: include the relation in the parent query (include: { ... }), or findMany({ where: { id: { in: ids } } }) and match results in memory`;
+  if (/^mongo /.test(label)) {
+    return has('mongoose')
+      ? `load them in one query: populate() the reference in the parent query, or Model.find({ _id: { $in: ids } }) and match results in memory`
+      : `load them in one query: find({ _id: { $in: ids } }) (or an aggregate with $lookup), then match results in memory`;
+  }
+  if (/^redis /.test(label)) return `send them in one round trip: MGET / HMGET for reads, or a pipeline (multi) for mixed commands`;
+  if (/^sqlite /.test(label) && !has('drizzle-orm')) return `load them in one query: WHERE id IN (...), then match results in memory`;
+  if (SQL.test(label) || /^sqlite /.test(label)) {
+    const orm = ORM_BATCH.find(([name]) => has(name));
+    if (orm) return `load them in one query, ${orm[1]}; then match results in memory`;
+    return `load them in one query: WHERE id IN (...) (or = ANY($1) in Postgres), or your ORM's include/join; then match results in memory`;
+  }
+  return `make one batched call instead of one per item (a bulk API, or DataLoader to collect the calls of one tick)`;
+}
+
+function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, medians?: Map<string, number>, libraries?: string[]): string | undefined {
   const labels = f.evidence?.labels || [];
   switch (f.kind) {
     case 'blocked':
@@ -486,14 +521,8 @@ function suggestFix(f: Finding, hotspots?: Record<string, BlockingHotspot[]>, me
       const setting = driver === 'mysql' ? 'connectionLimit (mysql2 default 10)' : driver === 'pg' ? 'max (pg default 10)' : 'the pool size';
       return `requests queued for a connection: raise ${setting} if the database can take more connections, or hold each one for less time (no other awaits inside a transaction; release clients you check out yourself). Compare with --concurrency below the pool size`;
     }
-    case 'repeated': {
-      const label = labels[0] || '';
-      if (/^prisma\./.test(label)) return `load them in one call: include the relation in the parent query (include: { ... }), or findMany({ where: { id: { in: ids } } }) and match results in memory`;
-      if (/^sqlite /.test(label)) return `load them in one query: WHERE id IN (...) (in Drizzle: inArray(column, ids), or db.query with: { ... }); then match results in memory`;
-      return SQL.test(label)
-        ? `load them in one query: WHERE id IN (...) (or = ANY($1) in Postgres), or your ORM's include/join; then match results in memory`
-        : `make one batched call instead of one per item (a bulk API, or DataLoader to collect the calls of one tick)`;
-    }
+    case 'repeated':
+      return batchAdvice(labels[0] || '', libraries);
     case 'dominant': {
       // Outside tracked code: the message says what to do; waited: the blocking finding has the fix
       if (f.message.includes('outside any tracked call') || f.message.includes('waiting for blocking code')) return undefined;

@@ -4,10 +4,9 @@
 // its SQLite database created from ./schema.prisma. Run by `npm install`
 // (postinstall) here; set TRACEPERF_SKIP_PRISMA=1 to skip.
 //
-// Prisma 7 is not included: it no longer ships a query engine, so SQLite
-// needs a driver adapter (@prisma/adapter-better-sqlite3), a prisma.config.ts
-// and the new TypeScript-only "prisma-client" generator. instrumentPrisma's
-// Prisma 7 path (the tracing hook) is covered by the unit tests.
+// Prisma 7 (prisma7/) has its own schema and prisma.config.ts: it no longer
+// ships a query engine, so SQLite goes through @prisma/adapter-better-sqlite3,
+// and the client is generated as TypeScript (compat.js loads it with tsx).
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -26,4 +25,14 @@ for (const dir of ['prisma5', 'prisma6']) {
   run(process.execPath, [prisma, 'generate', '--schema', 'schema.prisma']);
   fs.rmSync(path.join(cwd, 'compat.db'), { force: true });
   run(process.execPath, [prisma, 'db', 'push', '--skip-generate', '--schema', 'schema.prisma']);
+}
+
+{
+  const cwd = path.join(__dirname, 'prisma7');
+  const run = (cmd, args) => execFileSync(cmd, args, { cwd, stdio: 'inherit' });
+  run(npm, [fs.existsSync(path.join(cwd, 'package-lock.json')) ? 'ci' : 'install', '--no-audit', '--no-fund']);
+  const prisma = path.join(cwd, 'node_modules', 'prisma', 'build', 'index.js');
+  run(process.execPath, [prisma, 'generate']);
+  fs.rmSync(path.join(cwd, 'compat.db'), { force: true });
+  run(process.execPath, [prisma, 'db', 'push']);
 }

@@ -1,0 +1,15 @@
+// Prisma 7: the TypeScript "prisma-client" generator; the URL is in prisma.config.ts
+generator client {
+  provider     = "prisma-client"
+  output       = "./generated"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id   Int    @id @default(autoincrement())
+  name String
+}
