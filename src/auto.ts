@@ -11,6 +11,7 @@
  */
 import type { OptimizedPerformanceMonitor } from './core/optimized-performance-monitor';
 import { loadNodeBuiltin } from './core/env';
+import { recordMountPaths } from './routes';
 import { HttpServerInstrumentOptions, instrumentFetch, instrumentHttp, instrumentHttpServer, labelKoaRoutes, Uninstall, wrapFastifyFactory } from './instrument';
 import { instrumentBetterSqlite3, instrumentMongo, instrumentMysql, instrumentMysql2, instrumentPg, instrumentNodeRedis, instrumentPrisma, instrumentRedis } from './drivers';
 
@@ -59,6 +60,24 @@ function declaredDependencies(dir: string): { names: Set<string>; dir: string } 
   }
 }
 
+/** Instrument one driver module by its package name; undefined when the name is not a tracked driver */
+export function instrumentModule(tp: OptimizedPerformanceMonitor, name: string, mod: any): Uninstall | undefined {
+  switch (name) {
+    case 'pg': return instrumentPg(tp, mod);
+    case 'mysql2': case 'mysql2/promise': return instrumentMysql2(tp, mod);
+    case 'mysql': return instrumentMysql(tp, mod);
+    case 'better-sqlite3': return instrumentBetterSqlite3(tp, mod);
+    case '@prisma/client': return instrumentPrisma(tp, mod);
+    case 'ioredis': return instrumentRedis(tp, mod);
+    case 'redis': case '@redis/client': return instrumentNodeRedis(tp, mod);
+    case 'mongodb': return instrumentMongo(tp, mod);
+    default: return undefined;
+  }
+}
+
+/** Package names instrumentModule handles */
+export const DRIVER_MODULES = ['pg', 'mysql2', 'mysql2/promise', 'mysql', 'better-sqlite3', '@prisma/client', 'ioredis', 'redis', '@redis/client', 'mongodb'];
+
 export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoInstrumentOptions = {}): AutoInstrumentResult {
   const disabled = new Set(options.disable ?? []);
   const instrumented: AutoTarget[] = [];
@@ -92,6 +111,14 @@ export function autoInstrument(tp: OptimizedPerformanceMonitor, options: AutoIns
   if (deps) {
     const appRequire = moduleApi.createRequire(path.join(deps.dir, 'package.json'));
     const load = (name: string) => appRequire(name);
+    // Express 5: remember router mount paths for traceperf run --routes
+    if (deps.names.has('express') && !disabled.has('server')) {
+      try {
+        restores.push(recordMountPaths(appRequire('express')));
+      } catch {
+        // routes under mounted routers are then not found
+      }
+    }
     // Koa: label requests by the route @koa/router / koa-router matched
     if (deps.names.has('koa') && !disabled.has('server')) {
       try {

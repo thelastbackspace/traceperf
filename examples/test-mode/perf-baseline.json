@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "routes": {
+    "GET /missing": {
+      "requests": 1,
+      "calls": {}
+    },
+    "GET /orders": {
+      "requests": 1,
+      "calls": {
+        "SELECT * FROM items WHERE order_id IN (?)": 1,
+        "SELECT * FROM orders LIMIT 8": 1
+      }
+    },
+    "GET /orders/:id": {
+      "requests": 1,
+      "calls": {
+        "SELECT * FROM orders WHERE id = ?": 1
+      }
+    }
+  },
+  "problems": []
+}

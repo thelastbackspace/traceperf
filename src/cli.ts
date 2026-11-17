@@ -13,7 +13,8 @@ import { LabelStats, StatsCollector, formatStatsTable } from './core/stats';
 import { explain, ExplainNode, ExplainOptions, Finding, formatFindings } from './core/explain';
 import { renderHtmlReport } from './report-html';
 import { createWatcher, WatchOptions } from './watch';
-import { parseRunArgs, runApp, RUN_USAGE } from './run';
+import { appLibraries, parseRunArgs, runApp, RUN_USAGE } from './run';
+import { parseTestArgs, runTests, TEST_USAGE } from './test-mode';
 
 /** --config FILE, or traceperf.config.json in the working directory when there is one */
 function readRunConfig(file?: string): string | undefined {
@@ -367,7 +368,9 @@ const USAGE = `Usage:
   compare --fail exits with code 1 when any label regressed (for CI)
   watch follows a JSON-lines log as it grows; --once prints one frame
 
-${RUN_USAGE}`;
+${RUN_USAGE}
+
+${TEST_USAGE}`;
 
 export function main(argv: string[], io: {
   readFile: (path: string) => string;
@@ -393,6 +396,11 @@ export function main(argv: string[], io: {
   if (command === 'run') {
     const args = parseRunArgs(rest, readRunConfig, process.env);
     io.err(typeof args === 'string' ? `traceperf: ${args}\n\n${RUN_USAGE}` : 'traceperf: run starts an app; use the traceperf command');
+    return 1;
+  }
+  if (command === 'test') {
+    const args = parseTestArgs(rest);
+    io.err(typeof args === 'string' ? `traceperf: ${args}\n\n${TEST_USAGE}` : 'traceperf: test runs a command; use the traceperf command');
     return 1;
   }
   if (command !== 'report') {
@@ -570,6 +578,9 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const argv = process.argv.slice(2);
   const watchArgs = argv[0] === 'watch' ? parseWatchArgs(argv.slice(1)) : undefined;
   const runArgs = argv[0] === 'run' ? parseRunArgs(argv.slice(1), readRunConfig, process.env) : undefined;
+  const testArgs = argv[0] === 'test' ? parseTestArgs(argv.slice(1)) : undefined;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const libraries = () => appLibraries(fs, require('path'), process.cwd());
   if (watchArgs && typeof watchArgs !== 'string' && !watchArgs.once) {
     watchLive(watchArgs, fs);
   } else if (runArgs && typeof runArgs !== 'string') {
@@ -577,7 +588,20 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
     runApp(runArgs, {
       childProcess: require('child_process'), fs, http: require('http'), os: require('os'), path: require('path'),
       registerPath: require('path').join(__dirname, 'register.js'),
-      report, parseTrees,
+      report, parseTrees, libraries: libraries(),
+      out: text => console.log(text),
+      err: text => console.error(text),
+    }).then(code => { process.exitCode = code; }, error => {
+      console.error(`traceperf: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    });
+    /* eslint-enable @typescript-eslint/no-require-imports */
+  } else if (testArgs && typeof testArgs !== 'string') {
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    runTests(testArgs, {
+      childProcess: require('child_process'), fs, os: require('os'), path: require('path'),
+      registerPath: require('path').join(__dirname, 'register.js'),
+      parseTrees, libraries: libraries(),
       out: text => console.log(text),
       err: text => console.error(text),
     }).then(code => { process.exitCode = code; }, error => {

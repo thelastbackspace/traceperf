@@ -265,6 +265,67 @@ describe.each([['redis@5', 'redis'], ['redis@4', 'redis4']])('instrumentNodeRedi
     const { tp } = setup();
     expect(() => instrumentNodeRedis(tp, {})()).not.toThrow();
   });
+
+  test('callback clients (v4 legacyMode, v5 client.legacy()) are tracked, with or without a callback', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const redis = require(pkg);
+    const v4 = pkg === 'redis4';
+    const { tp, roots } = setup();
+    const uninstall = instrumentNodeRedis(tp, redis);
+    const base = redis.createClient({ url: `redis://127.0.0.1:${port}`, socket: { reconnectStrategy: false }, ...(v4 ? { legacyMode: true } : {}) });
+    const errors: unknown[] = [];
+    base.on('error', (e: unknown) => errors.push(e));
+    try {
+      await base.connect();
+      const client = v4 ? base : base.legacy();
+      const call = (name: string, ...args: unknown[]) => new Promise((resolve, reject) => client[name](...args, (e: unknown, r: unknown) => (e ? reject(e) : resolve(r))));
+      await tp.track(async () => {
+        await call('set', 'k', 'v');
+        expect(await call('get', 'k')).toBe('v');
+        await expect(call('sendCommand', 'NOPE')).rejects.toThrow();
+        client.incr('n');
+        await waitFor(() => roots.length > 0 || false);
+        await new Promise(r => setTimeout(r, 30));
+      }, { label: 'job' });
+    } finally {
+      uninstall();
+      await base.disconnect();
+    }
+    const job = roots.find(r => r.label === 'job')!;
+    expect(labels(job)).toEqual(['redis SET', 'redis GET', 'redis NOPE', 'redis INCR']);
+    expect(job.children[2].error).toBeDefined();
+    expect(errors).toEqual([]);
+  });
+});
+
+describe('legacy node-redis client wrapper', () => {
+  test('a command without a callback that fails is still reported as an error event', async () => {
+    const { tp, roots } = setup();
+    class Client {
+      constructor() {
+        (this as any).v4 = {};
+        (this as any).sendCommand = (...args: any[]) => {
+          const cb = args[args.length - 1];
+          setTimeout(() => cb(new Error('boom')), 1);
+        };
+      }
+      sendCommand() { return undefined; }
+      connect() { return Promise.resolve(); }
+      emitted: unknown[] = [];
+      emit(_event: string, e: unknown) { this.emitted.push(e); }
+    }
+    const client = new Client() as any;
+    const uninstall = instrumentNodeRedis(tp, { createClient: () => new Client() });
+    await client.connect();
+    await client.connect();
+    await tp.track(async () => {
+      client.sendCommand(['GET', 'k']);
+      await new Promise(r => setTimeout(r, 10));
+    }, { label: 'job' });
+    uninstall();
+    expect(client.emitted).toHaveLength(1);
+    expect(labels(roots.find(r => r.label === 'job')!)).toEqual(['redis GET']);
+  });
 });
 
 describe('instrumentMysql2 (real mysql2 client)', () => {

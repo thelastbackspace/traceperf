@@ -21,6 +21,8 @@ export interface SeqScan {
   rows: number;
   /** Columns compared in the filter, in order: the index to suggest */
   columns: string[];
+  /** Rows the scan reads (MySQL's estimate; Postgres: the table's size is used) */
+  examined?: number;
 }
 
 /** Every sequential scan with a filter in a plan (the root of EXPLAIN (FORMAT JSON) output, or its "Plan") */
@@ -60,8 +62,71 @@ export function filterColumns(filter: string): string[] {
   return [...eq, ...range];
 }
 
-/** "CREATE INDEX ON orders (customer_id, created_at)" */
-export function indexStatement(table: string, columns: string[]): string {
+/**
+ * "CREATE INDEX ON orders (customer_id, created_at)" (Postgres names it);
+ * MySQL needs a name: "CREATE INDEX idx_orders_customer_id ON orders (customer_id)"
+ */
+export function indexStatement(table: string, columns: string[], dialect: 'pg' | 'mysql' = 'pg'): string {
+  if (dialect === 'mysql') {
+    const quote = (name: string) => (/^[a-z_][a-z0-9_]*$/i.test(name) ? name : `\`${name.replace(/`/g, '``')}\``);
+    const bare = table.split('.').pop() || table;
+    const name = `idx_${bare}_${columns.join('_')}`.replace(/[^\w]/g, '_').slice(0, 64);
+    return `CREATE INDEX ${name} ON ${table.split('.').map(quote).join('.')} (${columns.map(quote).join(', ')})`;
+  }
   const quote = (name: string) => (/^[a-z_][a-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`);
   return `CREATE INDEX ON ${table.split('.').map(quote).join('.')} (${columns.map(quote).join(', ')})`;
+}
+
+/**
+ * Full table scans with a condition in MySQL / MariaDB EXPLAIN FORMAT=JSON
+ * output ("access_type": "ALL"), in the same shape as seqScans.
+ */
+export function mysqlFullScans(plan: unknown): SeqScan[] {
+  const out: SeqScan[] = [];
+  const visit = (node: unknown, depth: number) => {
+    if (!node || typeof node !== 'object' || depth > 50) return;
+    if (Array.isArray(node)) {
+      node.forEach(n => visit(n, depth + 1));
+      return;
+    }
+    const n = node as Record<string, any>;
+    if (n.access_type === 'ALL' && typeof n.table_name === 'string' && typeof n.attached_condition === 'string') {
+      const examined = Number(n.rows_examined_per_scan ?? n.rows) || 0;
+      const filtered = Number(n.filtered);
+      const produced = n.rows_produced_per_join !== undefined
+        ? Number(n.rows_produced_per_join) || 0
+        : Number.isFinite(filtered) ? Math.round((examined * filtered) / 100) : examined;
+      out.push({ table: n.table_name, filter: n.attached_condition, rows: produced, examined, columns: mysqlFilterColumns(n.attached_condition, n.table_name) });
+    }
+    for (const value of Object.values(n)) if (value && typeof value === 'object') visit(value, depth + 1);
+  };
+  visit(plan, 0);
+  return out;
+}
+
+/**
+ * Columns of `table` compared with a value in a MySQL attached_condition:
+ * "(`shop`.`orders`.`customer_id` = 42)", "((`o`.`status` = 'paid') and (`o`.`created_at` > '2024-01-01'))",
+ * MariaDB: "orders.customer_id = 42". Equality first, then ranges; <>, LIKE and joins left out.
+ */
+export function mysqlFilterColumns(condition: string, table?: string): string[] {
+  const eq: string[] = [];
+  const range: string[] = [];
+  const ident = '(?:`[^`]+`|[A-Za-z_][\\w$]*)';
+  const re = new RegExp(`((?:${ident}\\.)*${ident})\\s*(<=>|<>|!=|<=|>=|=|<|>|\\bin\\s*\\(|\\bbetween\\b|\\blike\\b)\\s*([^\\s)]*)`, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(condition))) {
+    const parts = m[1].split('.').map(p => p.replace(/`/g, ''));
+    const column = parts[parts.length - 1];
+    if (/^(and|or|not|null|true|false)$/i.test(column) || /^\d/.test(column)) continue;
+    // Only the scanned table's own columns (not the other side of a join)
+    if (table && parts.length > 1 && parts[parts.length - 2] !== table) continue;
+    const op = m[2].toLowerCase().replace(/\s+/g, ' ');
+    if (op === '<>' || op === '!=' || op === 'like') continue;
+    // Column = other column (a join condition): the other table's index, not this one
+    if (/^`|^[a-z_][\w$]*\.[`a-z_]/i.test(m[3])) continue;
+    const list = op === '=' || op === '<=>' || op.startsWith('in') ? eq : range;
+    if (!eq.includes(column) && !range.includes(column)) list.push(column);
+  }
+  return [...eq, ...range];
 }

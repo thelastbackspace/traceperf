@@ -12,6 +12,7 @@ import { explain, formatFindings, Finding } from './core/explain';
 import { indexStatement, SeqScan } from './core/sql-plan';
 import { blockingHotspots, BlockingProfileEntry } from './core/cpu-profile';
 import { normalizePath } from './instrument';
+import { DiscoveredRoute, pathsToProbe } from './routes';
 
 export interface RunArgs {
   /** Command and its arguments; a .js/.mjs/.cjs file runs with this Node */
@@ -48,18 +49,25 @@ export interface RunArgs {
   profile: boolean;
   /** Ms to wait for the app to listen before giving up */
   startTimeoutMs: number;
-  /** EXPLAIN the app's SELECTs after the load and report full scans an index would avoid (Postgres; default on) */
+  /** EXPLAIN the app's SELECTs after the load and report full scans an index would avoid (Postgres, MySQL; default on) */
   explain: boolean;
   /** Tables smaller than this are fine to scan (default 10000 rows) */
   indexMinRows: number;
   /** From the config file: log in first and send the token with every request */
   login?: RunLogin;
+  /** Find the app's GET routes (Express, Fastify) and send traffic to them, with --path or instead of it */
+  routes?: boolean;
+  /** Values for route parameters with --routes: { id: '1' } fills /users/:id */
+  params?: Record<string, string>;
 }
 
 export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
   traceperf run [options] -- <command...>      e.g. -- npm start
-      --path /a        send traffic to this path (repeatable); without it,
-                       use the app yourself and press Ctrl-C for the report
+      --path /a        send traffic to this path (repeatable); without it (and
+                       --routes), use the app yourself and press Ctrl-C for the report
+      --routes         find the app's GET routes (Express, Fastify) and send
+                       traffic to each; routes with parameters need --param
+      --param id=1     value for a route parameter with --routes (repeatable)
       -c, --concurrency N   parallel requests (default 10)
       -d, --duration 5s     how long to send traffic (default 5s)
       -n, --requests N      stop after N requests instead
@@ -80,7 +88,7 @@ export const RUN_USAGE = `  traceperf run <app.js> [app args] [options]
       --config f.json  read these options from a file (default: traceperf.config.json
                        if present; command-line options win). It can also log in
                        first: "login": {"path": "/api/login", "body": {...}, "token": "user.token"}
-      --no-explain     don't EXPLAIN the app's Postgres SELECTs after the load
+      --no-explain     don't EXPLAIN the app's Postgres / MySQL SELECTs after the load
                        (it plans them, never runs them, to find missing indexes)
       --no-profile     don't sample the CPU (blocking code is then named
                        only by its tracked call)`;
@@ -125,6 +133,10 @@ export interface RunConfig {
   saveBaseline?: string;
   html?: string;
   login?: RunLogin;
+  /** Find the routes (like --routes) */
+  routes?: boolean;
+  /** Route parameter values for routes, e.g. { "id": "1" } */
+  params?: Record<string, string>;
 }
 
 /** Replace "${NAME}" with process environment values, in every string of a JSON value */
@@ -152,6 +164,8 @@ function configArgv(c: RunConfig): string[] {
   opt('--baseline', c.baseline);
   opt('--save-baseline', c.saveBaseline);
   opt('--html', c.html);
+  if (c.routes) out.push('--routes');
+  for (const [k, v] of Object.entries(c.params || {})) out.push('--param', `${k}=${v}`);
   return out;
 }
 
@@ -267,6 +281,14 @@ function parseArgv(argv: string[], partial = false, start?: RunArgs): RunArgs | 
       case '--baseline': if (!(args.baseline = argv[++i])) return '--baseline expects a file'; break;
       case '--no-profile': args.profile = false; break;
       case '--no-explain': args.explain = false; break;
+      case '--routes': args.routes = true; break;
+      case '--param': {
+        const p = argv[++i] || '';
+        const eq = p.indexOf('=');
+        if (eq <= 0) return '--param expects name=value, e.g. --param id=1';
+        args.params = { ...args.params, [p.slice(0, eq).replace(/^:/, '')]: p.slice(eq + 1) };
+        break;
+      }
       case '--probe': {
         const n = Number(argv[++i]);
         if (!(n >= 0)) return '--probe expects a number';
@@ -605,13 +627,14 @@ export function summarise(
   max = 10,
   profiles: BlockingProfileEntry[] = [],
   cwd?: string,
+  libraries?: string[],
 ): RunSummary {
   const trees = deps.parseTrees(text);
   const hotspots = profiles.length ? blockingHotspots(profiles, { cwd }) : undefined;
   return {
     trees: trees.length,
     stats: trees.length ? deps.report(text, { top: 5 }) : '',
-    findings: explain(trees, { max, hotspots }),
+    findings: explain(trees, { max, hotspots, libraries }),
   };
 }
 
@@ -625,8 +648,25 @@ export interface RunDeps {
   registerPath: string;
   report: (text: string, options: any) => string;
   parseTrees: (text: string) => any[];
+  /** The app's dependencies (package.json), for ORM-specific advice */
+  libraries?: string[];
   out: (t: string) => void;
   err: (t: string) => void;
+}
+
+/** Dependency names in the nearest package.json at or above dir (for ORM-specific advice) */
+export function appLibraries(fs: any, path: any, dir: string): string[] {
+  let current = path.resolve(dir);
+  for (;;) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(current, 'package.json'), 'utf8'));
+      return Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return [];
+      current = parent;
+    }
+  }
 }
 
 const SCRIPT = /\.(c|m)?js$/;
@@ -640,6 +680,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   const profileFile = path.join(dir, 'profiles.jsonl');
   const loadFile = path.join(dir, 'load.jsonl');
   const explainFile = path.join(dir, 'explain.jsonl');
+  const routesFile = path.join(dir, 'routes.json');
   let loadWindow: { start: number; end: number } | undefined;
   if (args.output) fs.writeFileSync(output, '');
   const env: Record<string, string> = {
@@ -651,6 +692,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     ...(args.profile ? { TRACEPERF_PROFILE_BLOCKING: '1', TRACEPERF_PROFILE_OUTPUT: profileFile } : {}),
     TRACEPERF_LOAD_OUTPUT: loadFile,
     ...(args.explain ? { TRACEPERF_EXPLAIN_OUTPUT: explainFile } : {}),
+    ...(args.routes ? { TRACEPERF_ROUTES_OUTPUT: routesFile } : {}),
   } as Record<string, string>;
   const [cmd, ...cmdArgs] = args.command;
   const quoted = JSON.stringify(deps.registerPath);
@@ -730,7 +772,7 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
     }
   };
   try {
-    if (args.paths.length) {
+    if (args.paths.length || args.routes) {
       const port = args.port ?? (await waitForPort(fs, readyFile, () => exited, args.startTimeoutMs));
       if (port === undefined) {
         deps.err(exited
@@ -738,6 +780,27 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
           : `traceperf: the app did not start an HTTP server within ${args.startTimeoutMs / 1000} s; pass --port`);
         await stopAndWait();
         return 1;
+      }
+      if (args.routes) {
+        let routes: DiscoveredRoute[] = [];
+        try {
+          routes = JSON.parse(fs.readFileSync(routesFile, 'utf8'));
+        } catch {
+          routes = [];
+        }
+        const found = pathsToProbe(routes, args.params);
+        const paths = [...args.paths, ...found.paths.filter(p => !args.paths.includes(p))];
+        if (found.skipped.length) {
+          deps.err(`traceperf: skipping ${found.skipped.length} route${found.skipped.length === 1 ? '' : 's'} with parameters: ${found.skipped.slice(0, 8).join(', ')}${found.skipped.length > 8 ? ', ...' : ''} (give values with --param name=value)`);
+        }
+        if (!paths.length) {
+          deps.err(routes.length
+            ? 'traceperf: --routes found no GET route it could call; give --param values or --path'
+            : 'traceperf: --routes found no routes (it reads Express and Fastify apps); give --path instead');
+          await stopAndWait();
+          return 1;
+        }
+        args = { ...args, paths };
       }
       deps.err(`traceperf: sending ${args.requests ? `${args.requests} requests` : `${args.durationMs / 1000} s of traffic`} to ${args.paths.join(', ')} on port ${port}, ${args.concurrency} at a time`);
       if (args.login) {
@@ -807,11 +870,11 @@ export async function runApp(args: RunArgs, deps: RunDeps): Promise<number> {
   } catch {
     // no profiles: --no-profile, no inspector, or nothing blocked
   }
-  const summary = summarise(text, deps, args.max, profiles, process.cwd());
+  const summary = summarise(text, deps, args.max, profiles, process.cwd(), deps.libraries);
   // Per-request structure from the one-at-a-time probe, where call times are not inflated by queueing
   const STRUCTURAL = ['dominant', 'sequential', 'repeated'];
   if (probeText.trim()) {
-    const structural = explain(deps.parseTrees(probeText), { max: args.max }).filter(f => STRUCTURAL.includes(f.kind));
+    const structural = explain(deps.parseTrees(probeText), { max: args.max, libraries: deps.libraries }).filter(f => STRUCTURAL.includes(f.kind));
     summary.findings = [...summary.findings.filter(f => !STRUCTURAL.includes(f.kind)), ...structural].slice(0, args.max);
   }
   if (load) {
@@ -937,8 +1000,10 @@ export function indexFindings(plans: ExplainedQuery[], minRows = 10000): Finding
   const said = new Set<string>();
   for (const p of plans.slice().sort((a, b) => b.count - a.count)) {
     for (const scan of p.scans) {
-      if (scan.tableRows < minRows || !scan.columns.length || scan.rows > 0.1 * scan.tableRows) continue;
-      const statement = indexStatement(scan.table, scan.columns);
+      // Selective: returns at most 10% of what it reads (MySQL's default guess for "col = value" is exactly 10%)
+      if (scan.tableRows < minRows || !scan.columns.length || scan.rows > 0.1 * (scan.examined || scan.tableRows)) continue;
+      const mysql = p.driver === 'mysql';
+      const statement = indexStatement(scan.table, scan.columns, mysql ? 'mysql' : 'pg');
       if (said.has(statement)) continue;
       said.add(statement);
       const sql = p.text.replace(/\s+/g, ' ').trim();
@@ -946,7 +1011,7 @@ export function indexFindings(plans: ExplainedQuery[], minRows = 10000): Finding
         kind: 'index',
         root: p.text,
         ms: 0,
-        message: `${sql.length > 120 ? `${sql.slice(0, 117)}...` : sql} (run ${p.count} time${p.count === 1 ? '' : 's'}) reads all ~${scan.tableRows.toLocaleString('en-US')} rows of ${scan.table} to return ~${scan.rows} (Seq Scan, Filter: ${scan.filter})`,
+        message: `${sql.length > 120 ? `${sql.slice(0, 117)}...` : sql} (run ${p.count} time${p.count === 1 ? '' : 's'}) reads all ~${scan.tableRows.toLocaleString('en-US')} rows of ${scan.table} ${mysql ? 'to find the matching ones (full table scan' : `to return ~${scan.rows} (Seq Scan`}, ${mysql ? 'condition' : 'Filter'}: ${scan.filter})`,
         fix: `add an index: ${statement} (from EXPLAIN on this database: check it on production-sized data)`,
       });
     }

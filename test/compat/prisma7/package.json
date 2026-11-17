@@ -1,0 +1,12 @@
+{
+  "name": "traceperf-compat-prisma7",
+  "private": true,
+  "description": "Prisma 7: no query engine, so SQLite goes through a driver adapter; the generated client is TypeScript, loaded with tsx (installed by ../prisma-setup.js).",
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "7",
+    "@prisma/client": "7",
+    "better-sqlite3": "12",
+    "prisma": "7",
+    "tsx": "4"
+  }
+}

@@ -217,10 +217,30 @@ jobs:
         version: ./
         comment: 'false'
         fail: 'false'
+    # traceperf test: the same check from the app's own tests
+    - id: tests-same
+      uses: ./
+      with:
+        test: node --test examples/test-mode/app.test.js
+        baseline: examples/test-mode/perf-baseline.json
+        version: ./
+        comment: 'false'
+    - id: tests-nplus1
+      uses: ./
+      env:
+        ORDERS_N_PLUS_ONE: '1'
+      with:
+        test: node --test examples/test-mode/app.test.js
+        baseline: examples/test-mode/perf-baseline.json
+        version: ./
+        comment: 'false'
+        fail: 'false'
     - name: The batched app passed and the N+1 one was caught
       run: |
         test "${{ steps.same.outputs.regressed }}" = false
         test "${{ steps.nplus1.outputs.regressed }}" = true
+        test "${{ steps.tests-same.outputs.regressed }}" = false
+        test "${{ steps.tests-nplus1.outputs.regressed }}" = true
 
   # Bun and Deno run the ESM build (nesting, stats, exporters, browser entry).
   other-runtimes:

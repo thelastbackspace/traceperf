@@ -8,6 +8,10 @@ inputs:
     description: 'Arguments for `traceperf run`: the app and its paths, e.g. "dist/server.js --path /orders --path /users/1". Leave empty to use traceperf.config.json.'
     required: false
     default: ''
+  test:
+    description: 'Run this test command under `traceperf test` instead of `traceperf run`, e.g. "npm test": counts the calls per request your tests make'
+    required: false
+    default: ''
   baseline:
     description: Committed baseline file (create it with `npx traceperf run ... --save-baseline perf-baseline.json`)
     required: false
@@ -39,6 +43,7 @@ runs:
       shell: bash
       env:
         TP_ARGS: ${{ inputs.run }}
+        TP_TEST: ${{ inputs.test }}
         TP_BASELINE: ${{ inputs.baseline }}
         TP_VERSION: ${{ inputs.version }}
       run: |
@@ -50,7 +55,12 @@ runs:
           ./*|/*) cli=(node "$TP_VERSION/dist/cli.js") ;;
           *) cli=(npx --yes "traceperf@$TP_VERSION") ;;
         esac
-        "${cli[@]}" run $TP_ARGS --baseline "$TP_BASELINE" --markdown "$report"
+        if [ -n "$TP_TEST" ]; then
+          # shellcheck disable=SC2086 # the test command is a word list on purpose
+          "${cli[@]}" test --baseline "$TP_BASELINE" --markdown "$report" -- $TP_TEST
+        else
+          "${cli[@]}" run $TP_ARGS --baseline "$TP_BASELINE" --markdown "$report"
+        fi
         code=$?
         set -e
         if [ ! -s "$report" ]; then

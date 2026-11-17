@@ -1,2 +1,4 @@
-prisma*/schema.prisma
+prisma5/schema.prisma
+prisma6/schema.prisma
 prisma*/compat.db*
+prisma7/generated/

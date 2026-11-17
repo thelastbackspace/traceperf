@@ -24,6 +24,7 @@
     "mysql-2": "npm:mysql@2",
     "mysql2-2": "npm:mysql2@2",
     "mysql2-3": "npm:mysql2@3",
+    "mysql2-311": "npm:mysql2@3.11.5",
     "pg8": "npm:pg@8",
     "pg8-0": "npm:pg@8.0.3",
     "redis4": "npm:redis@4",

@@ -105,19 +105,22 @@ The database was fast; `buildReport` was blocking it. That only shows up when re
      fix: Mongoose is building full documents: add .lean() to read-only queries … and .select() only the fields you send
   ```
 - **Timings you can trust:** after the warm-up, `run` sends a few requests one at a time (`--probe`) and takes the per-request findings (a call taking most of a request, sequential awaits, N+1) from those. Under concurrent load every `await` also waits for the busy event loop, which makes fast queries look slow.
-- **Missing indexes (Postgres):** after the load, the app runs plain `EXPLAIN` (the query is planned, not executed) on the `SELECT`s it made and reports full scans of big tables that an index would avoid:
+- **Missing indexes (Postgres, MySQL):** after the load, the app runs plain `EXPLAIN` (the query is planned, not executed) on the `SELECT`s it made and reports full scans of big tables that an index would avoid:
 
   ```
   🔍 SELECT * FROM orders WHERE customer_id = $1 (run 1219 times) reads all ~60,000 rows of orders to return ~12 (Seq Scan, Filter: (customer_id = 0))
      fix: add an index: CREATE INDEX ON orders (customer_id)
   ```
-  Postgres scans small tables on purpose, so a test database with little data rarely shows one: point the run at realistic data. Tables under 10,000 rows are ignored. `--no-explain` turns it off.
+  On MySQL and MariaDB (`mysql2`) it reads `EXPLAIN FORMAT=JSON` the same way and names the index: `CREATE INDEX idx_orders_customer_id ON orders (customer_id)`.
+  Databases scan small tables on purpose, so a test database with little data rarely shows one: point the run at realistic data. Tables under 10,000 rows are ignored. `--no-explain` turns it off.
 - **Pool exhaustion:** with `pg` and `mysql2`, the time a request waits for a free connection from a full pool is tracked (`pg pool wait`) and reported, with the pool setting to change: "GET /report waited 65 ms for a free pg connection (79% of the request): every connection in the pool was in use".
+- **N+1 fixes in your ORM's words:** the fix names the call to use in the ORM your `package.json` lists: `include` / `[Op.in]` for Sequelize, `relations` / `In(ids)` for TypeORM, `inArray` for Drizzle, `whereIn` for Knex, `populate()` / `$in` for Mongoose, `include` for Prisma, `MGET` or a pipeline for Redis.
 - **Wrong setup is said first:** "2117 of 2117 responses failed (most: 401 Unauthorized)…" instead of timings of error pages.
 
 Checked on real apps, not only on the planted ones: Prisma's REST example, the RealWorld API (Express + Prisma), an Express + Mongoose boilerplate and a NestJS + TypeORM app.
 
-- `--path /x` (repeatable): what to request. Without `--path`, use the app yourself and press Ctrl-C for the report.
+- `--path /x` (repeatable): what to request. Without `--path` (or `--routes`), use the app yourself and press Ctrl-C for the report.
+- `--routes`: find the app's GET routes (Express 4 and 5, nested routers included, and Fastify) and send traffic to each, so `npx traceperf run server.js --routes` needs no list. Routes with parameters are skipped unless you give values: `--param id=1` fills `/users/:id`.
 - `-c 10` concurrency, `-d 5s` duration or `-n 500` requests, `--method POST`, `--port 3000` (detected by default).
 - `-H "Authorization: Bearer $TOKEN"` (repeatable): request headers, for APIs behind a login.
 - `--probe 10`: requests per path sent one at a time before the load (0 for none).
@@ -144,6 +147,30 @@ Checked on real apps, not only on the planted ones: Prisma's REST example, the R
 ```
 
 `token` is the dotted path of the token in the JSON response, sent as `authorization: Bearer <token>` unless `header` / `prefix` say otherwise. Leave `token` out to use the cookies the login sets. `method` defaults to POST.
+
+### During your tests: `traceperf test`
+
+If your tests already send requests to the app (supertest, or `fetch` to a server the tests start), they can count the queries instead of synthetic traffic: no routes to list, no load, and the coverage of your whole suite.
+
+<!-- docs:skip -->
+```bash
+npx traceperf test -- npm test
+```
+
+```
+traceperf: 184 requests during the tests
+
+route               requests  calls/request  calls
+------------------  --------  -------------  -----
+GET /orders                6             13  pg SELECT items ×12, pg SELECT orders
+GET /orders/:id           11              2  pg SELECT orders, pg SELECT items
+POST /orders               4              3  pg INSERT orders, pg INSERT items ×2
+
+🔁 GET /orders called pg SELECT items 12 times (18 ms total); batching them into one call may help (N+1 pattern)
+   fix: load them in one query, in Sequelize: include the association in the parent query …
+```
+
+It works with Jest (its per-file module sandboxes included), Vitest, Mocha and `node:test`. Calls per request are the median over the requests a route got, so tests that seed different data still give the same numbers run after run. `--save-baseline` / `--baseline` work as below, and the tests' own exit code wins: a failing suite still fails the job. Only requests to a server in the test process are counted; tests that call functions directly aren't requests.
 
 ### In CI: fail a PR that adds queries
 
@@ -178,7 +205,7 @@ permissions:
 steps:
   - uses: actions/checkout@v4
   - run: npm ci && npm run build && npm run db:seed
-  - uses: thelastbackspace/traceperf@v1.9.0
+  - uses: thelastbackspace/traceperf@v1.10.0
     with:
       run: dist/server.js --path /orders --path /users/1   # or leave out and use traceperf.config.json
       baseline: perf-baseline.json
@@ -188,7 +215,17 @@ steps:
 > - ✖ GET /orders: SELECT * FROM items WHERE order_id = ? 0 → 12 per request (an N+1?)
 > - ✖ new problem: N+1 in GET /orders
 
-Inputs: `run`, `baseline`, `comment` (default `true`), `fail` (default `true`), `version` (traceperf version, default `1`). Output: `regressed`. The same report goes to the job summary; `--markdown file.md` writes it without the action.
+With `traceperf test`, use your tests instead of `run`:
+
+<!-- docs:skip -->
+```yaml
+  - uses: thelastbackspace/traceperf@v1.10.0
+    with:
+      test: npm test
+      baseline: perf-baseline.json   # npx traceperf test --save-baseline perf-baseline.json -- npm test
+```
+
+Inputs: `run`, `test` (a test command; used instead of `run`), `baseline`, `comment` (default `true`), `fail` (default `true`), `version` (traceperf version, default `1`). Output: `regressed`. The same report goes to the job summary; `--markdown file.md` writes it without the action.
 
 `examples/slow-apps/` has 20 small apps: 12 with one planted problem each (blocking in your code and in built-ins, sequential awaits, N+1 over SQL and over HTTP, a slow or flaky dependency, failing requests…) and 8 clean ones where the right answer is "no issues". `npm run eval` scores `run` on them, and CI fails on a missed problem or a false alarm.
 

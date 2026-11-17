@@ -5,6 +5,7 @@
  * function that removes the patch. Calls made inside a tracked call nest
  * under it like any other tracked call.
  */
+import { routeSink } from './routes';
 import type { OptimizedPerformanceMonitor } from './core/optimized-performance-monitor';
 import type { TrackOptions } from './types/options';
 import { loadNodeBuiltin } from './core/env';
@@ -296,6 +297,12 @@ export function wrapFastifyFactory(fastify: any): any {
         const url = (request.routeOptions && request.routeOptions.url) || request.routerPath;
         if (typeof url === 'string' && request.raw) request.raw[ROUTE] = url;
         done();
+      });
+      // For traceperf run --routes: every route as Fastify registers it
+      app.addHook('onRoute', (route: any) => {
+        const methods = ([] as string[]).concat(route.method || []);
+        const sink = routeSink();
+        for (const method of methods) if (typeof route.url === 'string' && sink.length < 5000) sink.push({ method: String(method).toUpperCase(), path: route.url });
       });
     } catch {
       // never break the app
