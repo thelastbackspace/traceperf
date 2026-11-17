@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-17
+
 ### Added
 - **`traceperf test -- <test command>`**: counts the database and HTTP calls each route makes per request while your own tests run (supertest, or `fetch` to a server the tests start), instead of synthetic traffic: no routes to list. Works with Jest (drivers loaded into its per-file sandboxes are tracked too), Vitest, Mocha and `node:test`. Reports calls per request for each route and N+1s; `--save-baseline` / `--baseline` / `--markdown` / `--json` work as with `run`, and the tests' own exit code wins. The GitHub Action takes `test: npm test` in place of `run`.
 - **`traceperf run --routes`**: finds the app's GET routes (Express 4 and 5 with nested routers, Fastify) and sends traffic to each; `--param id=1` fills route parameters. Also `"routes": true` / `"params"` in `traceperf.config.json`.
